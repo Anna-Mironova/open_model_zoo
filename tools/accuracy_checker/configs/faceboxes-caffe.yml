@@ -1,0 +1,53 @@
+models:
+  - name: faceboxes-caffe
+
+    launchers:
+      - framework: dlsdk
+        tags:
+          - FP32
+        model:   public/faceboxes-caffe/FP32/faceboxes-caffe.xml
+        weights: public/faceboxes-caffe/FP32/faceboxes-caffe.bin
+        adapter: ssd
+
+      - framework: dlsdk
+        tags:
+          - FP16
+        model:   public/faceboxes-caffe/FP16/faceboxes-caffe.xml
+        weights: public/faceboxes-caffe/FP16/faceboxes-caffe.bin
+        adapter: ssd
+
+      - framework: dlsdk
+        tags:
+          - FP32-INT8
+        model:   public/faceboxes-caffe/FP32-INT8/faceboxes-caffe.xml
+        weights: public/faceboxes-caffe/FP32-INT8/faceboxes-caffe.bin
+        adapter: ssd
+
+      - framework: dlsdk
+        tags:
+          - FP16-INT8
+        model:   public/faceboxes-caffe/FP16-INT8/faceboxes-caffe.xml
+        weights: public/faceboxes-caffe/FP16-INT8/faceboxes-caffe.bin
+        adapter: ssd
+
+    datasets:
+      - name: wider
+
+        preprocessing:
+          - type: resize
+            dst_width: 1024
+            dst_height: 1024
+
+        postprocessing:
+          - type: resize_prediction_boxes
+          - type: filter
+            apply_to: annotation
+            height_range: 100
+            is_empty: True
+
+        metrics:
+          - type: map
+            ignore_difficult: True
+            include_boundaries: False
+
+global_definitions: ../dataset_definitions.yml

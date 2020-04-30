@@ -106,10 +106,13 @@ class HumanPoseAdapter(Adapter):
             raw_output = zip(identifiers, keypoints_heat_map, pafs, frame_meta)
         for identifier, heatmap, paf, meta in raw_output:
             height, width, _ = meta['image_size']
+            # heatmap_avg = np.zeros((height, width, 19), dtype=np.float32)
+            # paf_avg = np.zeros((height, width, 38), dtype=np.float32)
             heatmap_avg = np.zeros((height, width, keypoints_num), dtype=np.float32)
             paf_avg = np.zeros((height, width, concat_out.shape[1]-keypoints_num), dtype=np.float32)
             pad = meta.get('padding', [0, 0, 0, 0])
             transpose_order = (1, 2, 0) if heatmap.shape[0] == keypoints_num else (0, 1, 2)
+            # transpose_order = (1, 2, 0) if heatmap.shape[0] == 19 else (0, 1, 2)
 
             heatmap = np.transpose(np.squeeze(heatmap), transpose_order)
             heatmap = cv2.resize(heatmap, (0, 0), fx=8, fy=8, interpolation=cv2.INTER_CUBIC)
@@ -126,7 +129,7 @@ class HumanPoseAdapter(Adapter):
             peak_counter = 0
             all_peaks = []
             # for part in range(0, 18):  # 19th for bg
-            for part in range(0, 25):  # 19th for bg
+            for part in range(0, 25):  # 26th for bg
                 peak_counter += self.find_peaks(heatmap_avg[:, :, part], all_peaks, peak_counter)
 
             subset, candidate = self.group_peaks(all_peaks, paf_avg)
@@ -171,8 +174,9 @@ class HumanPoseAdapter(Adapter):
 
         return peak_counter
 
+    #def _add_pose_single_candidate(subset, candidate, idx_joint, kpt_num=20):
     @staticmethod
-    def _add_pose_single_candidate(subset, candidate, idx_joint, kpt_num=20):
+    def _add_pose_single_candidate(subset, candidate, idx_joint, kpt_num):
         for joint in candidate:
             num = 0
             for subset_j in subset:  # check if already in some pose, was added as a part of another limb
@@ -199,7 +203,8 @@ class HumanPoseAdapter(Adapter):
         return np.asarray(filtered_subset)
 
     @staticmethod
-    def _add_pose_both_candidates(subset, temp, index_a, index_b, candidates, kpt_num=20):
+    #def _add_pose_both_candidates(subset, temp, index_a, index_b, candidates, kpt_num=20):
+    def _add_pose_both_candidates(subset, temp, index_a, index_b, candidates, kpt_num):
         for i, temp_i in enumerate(temp):
             num = 0
             for j, subset_j in enumerate(subset):
@@ -337,7 +342,8 @@ class HumanPoseAdapter(Adapter):
             else:
                 index_a = self.limb_seq[keypoint_id][0] - 1
                 index_b = self.limb_seq[keypoint_id][1] - 1
-                if keypoint_id in (17, 18):
+                # if keypoint_id in (17, 18):
+                if keypoint_id in (24, 25):
                     subset = self._copy_temperature_to_subset(subset, temp, index_a, index_b)
                     continue
                 subset = self._add_pose_both_candidates(subset, temp, index_a, index_b, candidates, kpt_num)
@@ -351,14 +357,28 @@ class HumanPoseAdapter(Adapter):
         for subset_element in subset:
             if subset_element.size == 0:
                 continue
-            # keypoints_x, keypoints_y, keypoints_v = [0] * 17, [0] * 17, [0] * 17
-            keypoints_x, keypoints_y, keypoints_v = [0] * 24, [0] * 24, [0] * 24
-            to_coco_map = [0, -1, 6, 8, 10, 5, 7, 9, 12, 14, 16, 11, 13, 15, 2, 1, 4, 3]
+            keypoints_x, keypoints_y, keypoints_v = [0] * 17, [0] * 17, [0] * 17
+            # to_coco_map = [0, -1, 6, 8, 10, 5, 7, 9, 12, 14, 16, 11, 13, 15, 2, 1, 4, 3]
+            to_coco_map = [0, -1, 6, 8, 10, 5, 7, 9, -1, 12, 14, 16, 11, 13, 15, 2, 1, 4, 3, -1, -1, -1, -1, -1, -1]
             person_score = subset_element[-2]
             position_id = -1
             for keypoint_id in subset_element[:-2]:
                 position_id += 1
                 if position_id == 1:  # No 'Neck' in COCO
+                    continue
+                if position_id == 8:  # No 'MidHip' in COCO
+                    continue
+                if position_id == 19:  # No 'LBigToe' in COCO
+                    continue
+                if position_id == 20:  # No 'LSmallToe' in COCO
+                    continue
+                if position_id == 21:  # No 'LHeel' in COCO
+                    continue
+                if position_id == 22:  # No 'RBigToe' in COCO
+                    continue
+                if position_id == 23:  # No 'RSmallToe' in COCO
+                    continue
+                if position_id == 24:  # No 'RHeel' in COCO
                     continue
 
                 cx, cy, visibility = 0, 0, 0  # Keypoint not found
@@ -370,8 +390,17 @@ class HumanPoseAdapter(Adapter):
                 keypoints_x[to_coco_map[position_id]] = cx
                 keypoints_y[to_coco_map[position_id]] = cy
                 keypoints_v[to_coco_map[position_id]] = visibility
-
-            scores.append(person_score * max(0, (subset_element[-1] - 1)))  # -1 for Neck
+            tmp = 0
+            tmp = tmp + 1 if subset_element[1] != -1 else tmp + 0
+            tmp = tmp + 1 if subset_element[8] != -1 else tmp + 0
+            tmp = tmp + 1 if subset_element[19] != -1 else tmp + 0
+            tmp = tmp + 1 if subset_element[20] != -1 else tmp + 0
+            tmp = tmp + 1 if subset_element[21] != -1 else tmp + 0
+            tmp = tmp + 1 if subset_element[22] != -1 else tmp + 0
+            tmp = tmp + 1 if subset_element[23] != -1 else tmp + 0
+            tmp = tmp + 1 if subset_element[24] != -1 else tmp + 0
+            print(tmp)
+            scores.append(person_score * max(0, (subset_element[-1] - tmp)))  # -1 for Neck
             persons_keypoints_x.append(keypoints_x)
             persons_keypoints_y.append(keypoints_y)
             persons_keypoints_v.append(keypoints_v)

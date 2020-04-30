@@ -30,13 +30,24 @@ class HumanPoseAdapter(Adapter):
     __provider__ = 'human_pose_estimation'
     prediction_types = (PoseEstimationPrediction, )
 
+    # limb_seq = [
+    #     [2, 3], [2, 6], [3, 4], [4, 5], [6, 7], [7, 8], [2, 9], [9, 10], [10, 11], [2, 12], [12, 13],
+    #     [13, 14], [2, 1], [1, 15], [15, 17], [1, 16], [16, 18], [3, 17], [6, 18]
+    # ]
     limb_seq = [
-        [2, 3], [2, 6], [3, 4], [4, 5], [6, 7], [7, 8], [2, 9], [9, 10], [10, 11], [2, 12], [12, 13],
-        [13, 14], [2, 1], [1, 15], [15, 17], [1, 16], [16, 18], [3, 17], [6, 18]
+        [2, 9], [2, 3], [2, 6], [3, 4], [4, 5], [6, 7], [7, 8], [9, 10], [10, 11], [11, 12], [9, 13],
+        [13, 14], [14, 15], [2, 1], [1, 16], [16, 18], [1, 17], [17, 19], [3, 18], [6, 19], [15, 20],
+        [20, 21], [15, 22], [12, 23], [23, 24], [12, 25]
     ]
+    # map_idx = [
+    #     [31, 32], [39, 40], [33, 34], [35, 36], [41, 42], [43, 44], [19, 20], [21, 22], [23, 24], [25, 26],
+    #     [27, 28], [29, 30], [47, 48], [49, 50], [53, 54], [51, 52], [55, 56], [37, 38], [45, 46]
+    # ]
+
     map_idx = [
-        [31, 32], [39, 40], [33, 34], [35, 36], [41, 42], [43, 44], [19, 20], [21, 22], [23, 24], [25, 26],
-        [27, 28], [29, 30], [47, 48], [49, 50], [53, 54], [51, 52], [55, 56], [37, 38], [45, 46]
+        [26, 27], [40, 41], [48, 49], [42, 43], [44, 45], [50, 51], [52, 53], [32, 33], [28, 29],
+        [30, 31], [34, 35], [36, 37], [38, 39], [56, 57], [58, 59], [62, 63], [60, 61], [64, 65],
+        [46, 47], [54, 55], [66, 67], [68, 69], [70, 71], [72, 73], [74, 75], [76, 77]
     ]
 
     @classmethod
@@ -95,10 +106,10 @@ class HumanPoseAdapter(Adapter):
             raw_output = zip(identifiers, keypoints_heat_map, pafs, frame_meta)
         for identifier, heatmap, paf, meta in raw_output:
             height, width, _ = meta['image_size']
-            heatmap_avg = np.zeros((height, width, 19), dtype=np.float32)
-            paf_avg = np.zeros((height, width, 38), dtype=np.float32)
+            heatmap_avg = np.zeros((height, width, keypoints_num), dtype=np.float32)
+            paf_avg = np.zeros((height, width, concat_out.shape[1]-keypoints_num), dtype=np.float32)
             pad = meta.get('padding', [0, 0, 0, 0])
-            transpose_order = (1, 2, 0) if heatmap.shape[0] == 19 else (0, 1, 2)
+            transpose_order = (1, 2, 0) if heatmap.shape[0] == keypoints_num else (0, 1, 2)
 
             heatmap = np.transpose(np.squeeze(heatmap), transpose_order)
             heatmap = cv2.resize(heatmap, (0, 0), fx=8, fy=8, interpolation=cv2.INTER_CUBIC)
@@ -114,7 +125,8 @@ class HumanPoseAdapter(Adapter):
 
             peak_counter = 0
             all_peaks = []
-            for part in range(0, 18):  # 19th for bg
+            # for part in range(0, 18):  # 19th for bg
+            for part in range(0, 25):  # 19th for bg
                 peak_counter += self.find_peaks(heatmap_avg[:, :, part], all_peaks, peak_counter)
 
             subset, candidate = self.group_peaks(all_peaks, paf_avg)
@@ -290,11 +302,13 @@ class HumanPoseAdapter(Adapter):
                 occur_b[j] = 1
         return connections
 
-    def group_peaks(self, peaks, pafs, kpt_num=20, threshold=0.05):
+    # def group_peaks(self, peaks, pafs, kpt_num=20, threshold=0.05):
+    def group_peaks(self, peaks, pafs, kpt_num=27, threshold=0.05):
         subset = []
         candidates = np.array([item for sublist in peaks for item in sublist])
         for keypoint_id, maped_keypoints in enumerate(self.map_idx):
-            score_mid = pafs[:, :, [x - 19 for x in maped_keypoints]]
+            # score_mid = pafs[:, :, [x - 19 for x in maped_keypoints]]
+            score_mid = pafs[:, :, [x - 26 for x in maped_keypoints]]
             candidate_a = peaks[self.limb_seq[keypoint_id][0] - 1]
             candidate_b = peaks[self.limb_seq[keypoint_id][1] - 1]
             idx_joint_a = self.limb_seq[keypoint_id][0] - 1
@@ -337,7 +351,8 @@ class HumanPoseAdapter(Adapter):
         for subset_element in subset:
             if subset_element.size == 0:
                 continue
-            keypoints_x, keypoints_y, keypoints_v = [0] * 17, [0] * 17, [0] * 17
+            # keypoints_x, keypoints_y, keypoints_v = [0] * 17, [0] * 17, [0] * 17
+            keypoints_x, keypoints_y, keypoints_v = [0] * 24, [0] * 24, [0] * 24
             to_coco_map = [0, -1, 6, 8, 10, 5, 7, 9, 12, 14, 16, 11, 13, 15, 2, 1, 4, 3]
             person_score = subset_element[-2]
             position_id = -1

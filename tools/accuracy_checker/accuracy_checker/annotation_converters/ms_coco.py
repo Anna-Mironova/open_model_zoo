@@ -55,6 +55,8 @@ def get_label_map(dataset_meta, full_annotation, use_full_label_map=False, has_b
         label_id_to_label = {label['id']: label_id + label_offset for label_id, label in enumerate(labels)}
         label_map = {label_id + label_offset: label['name'] for label_id, label in enumerate(labels)}
     else:
+        if not isinstance(labels, list):
+            labels = [labels]
         label_id_to_label = {label['id']: label['id'] for label in labels}
         label_map = {label['id']: label['name'] for label in labels}
 

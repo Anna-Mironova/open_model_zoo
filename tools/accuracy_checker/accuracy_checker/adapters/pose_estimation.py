@@ -399,7 +399,6 @@ class HumanPoseAdapter(Adapter):
             tmp = tmp + 1 if subset_element[22] != -1 else tmp + 0
             tmp = tmp + 1 if subset_element[23] != -1 else tmp + 0
             tmp = tmp + 1 if subset_element[24] != -1 else tmp + 0
-            print(tmp)
             scores.append(person_score * max(0, (subset_element[-1] - tmp)))  # -1 for Neck
             persons_keypoints_x.append(keypoints_x)
             persons_keypoints_y.append(keypoints_y)

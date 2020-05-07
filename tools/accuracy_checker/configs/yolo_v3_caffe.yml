@@ -15,9 +15,9 @@ models:
           classes: 80
           threshold: 0.001
           outputs:
-            - layer107-yolo
             - layer83-yolo
             - layer95-yolo
+            - layer107-yolo
 
       - framework: dlsdk
         tags:
@@ -32,9 +32,9 @@ models:
           classes: 80
           threshold: 0.001
           outputs:
-            - layer107-yolo
             - layer83-yolo
             - layer95-yolo
+            - layer107-yolo
 
       - framework: dlsdk
         tags:
@@ -49,9 +49,9 @@ models:
           classes: 80
           threshold: 0.001
           outputs:
-            - layer107-yolo
             - layer83-yolo
             - layer95-yolo
+            - layer107-yolo
 
       - framework: dlsdk
         tags:
@@ -66,9 +66,9 @@ models:
           classes: 80
           threshold: 0.001
           outputs:
-            - layer107-yolo
             - layer83-yolo
             - layer95-yolo
+            - layer107-yolo
 
     datasets:
       - name: ms_coco_detection_80_class_without_backgound

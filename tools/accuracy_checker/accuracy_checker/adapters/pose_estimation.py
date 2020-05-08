@@ -357,9 +357,9 @@ class HumanPoseAdapter(Adapter):
         for subset_element in subset:
             if subset_element.size == 0:
                 continue
-            keypoints_x, keypoints_y, keypoints_v = [0] * 17, [0] * 17, [0] * 17
+            keypoints_x, keypoints_y, keypoints_v = [0] * 23, [0] * 23, [0] * 23
             # to_coco_map = [0, -1, 6, 8, 10, 5, 7, 9, 12, 14, 16, 11, 13, 15, 2, 1, 4, 3]
-            to_coco_map = [0, -1, 6, 8, 10, 5, 7, 9, -1, 12, 14, 16, 11, 13, 15, 2, 1, 4, 3, -1, -1, -1, -1, -1, -1]
+            to_coco_map = [0, -1, 6, 8, 10, 5, 7, 9, -1, 12, 14, 16, 11, 13, 15, 2, 1, 4, 3, 17 , 18, 19, 20, 21, 22]
             person_score = subset_element[-2]
             position_id = -1
             for keypoint_id in subset_element[:-2]:
@@ -367,18 +367,6 @@ class HumanPoseAdapter(Adapter):
                 if position_id == 1:  # No 'Neck' in COCO
                     continue
                 if position_id == 8:  # No 'MidHip' in COCO
-                    continue
-                if position_id == 19:  # No 'LBigToe' in COCO
-                    continue
-                if position_id == 20:  # No 'LSmallToe' in COCO
-                    continue
-                if position_id == 21:  # No 'LHeel' in COCO
-                    continue
-                if position_id == 22:  # No 'RBigToe' in COCO
-                    continue
-                if position_id == 23:  # No 'RSmallToe' in COCO
-                    continue
-                if position_id == 24:  # No 'RHeel' in COCO
                     continue
 
                 cx, cy, visibility = 0, 0, 0  # Keypoint not found
@@ -393,13 +381,8 @@ class HumanPoseAdapter(Adapter):
             tmp = 0
             tmp = tmp + 1 if subset_element[1] != -1 else tmp + 0
             tmp = tmp + 1 if subset_element[8] != -1 else tmp + 0
-            tmp = tmp + 1 if subset_element[19] != -1 else tmp + 0
-            tmp = tmp + 1 if subset_element[20] != -1 else tmp + 0
-            tmp = tmp + 1 if subset_element[21] != -1 else tmp + 0
-            tmp = tmp + 1 if subset_element[22] != -1 else tmp + 0
-            tmp = tmp + 1 if subset_element[23] != -1 else tmp + 0
-            tmp = tmp + 1 if subset_element[24] != -1 else tmp + 0
-            scores.append(person_score * max(0, (subset_element[-1] - tmp)))  # -1 for Neck
+
+            scores.append(person_score * max(0, (subset_element[-1] - tmp)))  # -1 for Neck and MidHip
             persons_keypoints_x.append(keypoints_x)
             persons_keypoints_y.append(keypoints_y)
             persons_keypoints_v.append(keypoints_v)

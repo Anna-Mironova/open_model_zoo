@@ -382,9 +382,12 @@ def compute_oks(annotation_points, prediction_points, annotation_boxes, annotati
     # compute oks between each detection and ground truth object
     for gt_idx, gt_points in enumerate(annotation_points):
         # create bounds for ignore regions(double the gt bbox)
-        xgt = gt_points[:17]
-        ygt = gt_points[17:34]
-        vgt = gt_points[34:]
+        # xgt = gt_points[:17]
+        # ygt = gt_points[17:34]
+        # vgt = gt_points[34:]
+        xgt = gt_points[:23]
+        ygt = gt_points[23:46]
+        vgt = gt_points[46:]
         k1 = np.count_nonzero(vgt > 0)
         x0_bbox, y0_bbox, x1_bbox, y1_bbox = annotation_boxes[gt_idx]
         area_gt = annotation_areas[gt_idx]
@@ -395,8 +398,10 @@ def compute_oks(annotation_points, prediction_points, annotation_boxes, annotati
         y0 = y0_bbox - h_bbox
         y1 = y0_bbox + h_bbox * 2
         for dt_idx, dt_points in enumerate(prediction_points):
-            xdt = dt_points[:17]
-            ydt = dt_points[17:34]
+            # xdt = dt_points[:17]
+            # ydt = dt_points[17:34]
+            xdt = dt_points[:23]
+            ydt = dt_points[23:46]
             if k1 > 0:
                 # measure the per-keypoint distance if keypoints visible
                 x_diff = xdt - xgt

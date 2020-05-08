@@ -168,7 +168,7 @@ class MSCocoDetectionConverter(BaseFormatConverter):
         return image_labels, xmins, ymins, xmaxs, ymaxs, is_crowd, segmentation_polygons
 
 
-class MSCocoKeypointsConverter(FileBasedAnnotationConverter):
+class MSCocoKeypointsConverter(BaseFormatConverter):
     __provider__ = 'mscoco_keypoints'
     annotation_types = (PoseEstimationAnnotation, )
     @classmethod
@@ -176,6 +176,8 @@ class MSCocoKeypointsConverter(FileBasedAnnotationConverter):
         parameters = super().parameters()
         parameters.update(
             {
+                'annotation_file': PathField(description="Path to annotation file.", optional=True),
+                'specific_annotation_file': PathField(description="Path to specific annotation file.", optional=True),
                 'images_dir': PathField(
                     is_directory=True, optional=True,
                     description='path to dataset images, used only for content existence check'
@@ -189,52 +191,93 @@ class MSCocoKeypointsConverter(FileBasedAnnotationConverter):
 
     def configure(self):
         super().configure()
-        self.images_dir = self.get_value_from_config('images_dir') or self.annotation_file.parent
+        self.annotation_file = self.get_value_from_config('annotation_file')
+        self.specific_annotation_file = self.get_value_from_config('specific_annotation_file')
+        self.images_dir = self.get_value_from_config('images_dir')
         self.dataset_meta = self.get_value_from_config('dataset_meta_file')
 
     def convert(self, check_content=False, progress_callback=None, progress_interval=100, **kwargs):
         keypoints_annotations = []
         content_errors = []
+        if self.annotation_file and not self.specific_annotation_file:
+            full_annotation = read_json(self.annotation_file)
+            image_info = full_annotation['images']
+            annotations = full_annotation['annotations']
+            label_map, _ = get_label_map(self.dataset_meta, full_annotation, True)
+            num_iterations = len(image_info)
+            for image_id, image in enumerate(image_info):
+                identifier = image['file_name']
+                if check_content:
+                    full_image_path = self.images_dir / identifier
+                    if not check_file_existence(full_image_path):
+                        content_errors.append('{}: does not exist'.format(full_image_path))
+                image_annotation = get_image_annotation(image['id'], annotations)
+                if not image_annotation:
+                    continue
+                x_vals, y_vals, visibility, labels, areas, is_crowd, bboxes, difficult = [], [], [], [], [], [], [], []
+                for target in image_annotation:
+                    if target['num_keypoints'] == 0:
+                        difficult.append(len(x_vals))
+                    labels.append(target['category_id'])
+                    keypoints = target['keypoints']
+                    x_vals.append(keypoints[::3])
+                    y_vals.append(keypoints[1::3])
+                    visibility.append(keypoints[2::3])
+                    areas.append(target['area'])
+                    bboxes.append(convert_bboxes_xywh_to_x1y1x2y2(*target['bbox']))
+                    is_crowd.append(target['iscrowd'])
+                keypoints_annotation = PoseEstimationAnnotation(
+                    identifier, np.array(x_vals), np.array(y_vals), np.array(visibility), np.array(labels)
+                )
+                keypoints_annotation.metadata['areas'] = areas
+                keypoints_annotation.metadata['rects'] = bboxes
+                keypoints_annotation.metadata['iscrowd'] = is_crowd
+                keypoints_annotation.metadata['difficult_boxes'] = difficult
 
-        full_annotation = read_json(self.annotation_file)
-        image_info = full_annotation['images']
-        annotations = full_annotation['annotations']
-        label_map, _ = get_label_map(self.dataset_meta, full_annotation, True)
-        num_iterations = len(image_info)
-        for image_id, image in enumerate(image_info):
-            identifier = image['file_name']
-            if check_content:
-                full_image_path = self.images_dir / identifier
-                if not check_file_existence(full_image_path):
-                    content_errors.append('{}: does not exist'.format(full_image_path))
-            image_annotation = get_image_annotation(image['id'], annotations)
-            if not image_annotation:
-                continue
-            x_vals, y_vals, visibility, labels, areas, is_crowd, bboxes, difficult = [], [], [], [], [], [], [], []
-            for target in image_annotation:
-                if target['num_keypoints'] == 0:
-                    difficult.append(len(x_vals))
-                labels.append(target['category_id'])
-                keypoints = target['keypoints']
-                x_vals.append(keypoints[::3])
-                y_vals.append(keypoints[1::3])
-                visibility.append(keypoints[2::3])
-                areas.append(target['area'])
-                bboxes.append(convert_bboxes_xywh_to_x1y1x2y2(*target['bbox']))
-                is_crowd.append(target['iscrowd'])
-            keypoints_annotation = PoseEstimationAnnotation(
-                identifier, np.array(x_vals), np.array(y_vals), np.array(visibility), np.array(labels)
-            )
-            keypoints_annotation.metadata['areas'] = areas
-            keypoints_annotation.metadata['rects'] = bboxes
-            keypoints_annotation.metadata['iscrowd'] = is_crowd
-            keypoints_annotation.metadata['difficult_boxes'] = difficult
+                keypoints_annotations.append(keypoints_annotation)
+                if progress_callback is not None and image_id & progress_interval == 0:
+                    progress_callback(image_id / num_iterations * 100)
+            return ConverterReturn(keypoints_annotations, {'label_map': label_map}, None)
+        if self.specific_annotation_file and not self.annotation_file:
+            full_annotation = read_json(self.specific_annotation_file)
+            image_info = full_annotation['images']
+            annotations = full_annotation['annotations']
+            label_map, _ = get_label_map(self.dataset_meta, full_annotation, True)
+            num_iterations = len(image_info)
+            for image_id, image in enumerate(image_info):
+                identifier = image['file_name']
+                if check_content:
+                    full_image_path = self.images_dir / identifier
+                    if not check_file_existence(full_image_path):
+                        content_errors.append('{}: does not exist'.format(full_image_path))
+                image_annotation = get_image_annotation(image['id'], annotations)
+                if not image_annotation:
+                    continue
+                x_vals, y_vals, visibility, labels, areas, is_crowd, bboxes, difficult = [], [], [], [], [], [], [], []
+                for target in image_annotation:
+                    if target['num_keypoints'] == 0:
+                        difficult.append(len(x_vals))
+                    labels.append(target['category_id'])
+                    keypoints = [0] * 17 * 3
+                    keypoints.extend(target['keypoints'])
+                    x_vals.append(keypoints[::3])
+                    y_vals.append(keypoints[1::3])
+                    visibility.append(keypoints[2::3])
+                    areas.append(target['area'])
+                    bboxes.append(convert_bboxes_xywh_to_x1y1x2y2(*target['bbox']))
+                    is_crowd.append(target['iscrowd'])
+                keypoints_annotation = PoseEstimationAnnotation(
+                    identifier, np.array(x_vals), np.array(y_vals), np.array(visibility), np.array(labels)
+                )
+                keypoints_annotation.metadata['areas'] = areas
+                keypoints_annotation.metadata['rects'] = bboxes
+                keypoints_annotation.metadata['iscrowd'] = is_crowd
+                keypoints_annotation.metadata['difficult_boxes'] = difficult
 
-            keypoints_annotations.append(keypoints_annotation)
-            if progress_callback is not None and image_id & progress_interval == 0:
-                progress_callback(image_id / num_iterations * 100)
-
-        return ConverterReturn(keypoints_annotations, {'label_map': label_map}, None)
+                keypoints_annotations.append(keypoints_annotation)
+                if progress_callback is not None and image_id & progress_interval == 0:
+                    progress_callback(image_id / num_iterations * 100)
+            return ConverterReturn(keypoints_annotations, {'label_map': label_map}, None)
 
 
 class MSCocoSegmentationConverter(MSCocoDetectionConverter):

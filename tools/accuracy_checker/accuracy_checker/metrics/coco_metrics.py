@@ -377,7 +377,8 @@ def compute_oks(annotation_points, prediction_points, annotation_boxes, annotati
     if np.size(prediction_points) == 0 or np.size(annotation_points) == 0:
         return []
     oks = np.zeros((len(prediction_points), len(annotation_points)))
-    sigmas = np.array([.26, .25, .25, .35, .35, .79, .79, .72, .72, .62, .62, 1.07, 1.07, .87, .87, .89, .89])/10.0
+    # sigmas = np.array([.26, .25, .25, .35, .35, .79, .79, .72, .72, .62, .62, 1.07, 1.07, .87, .87, .89, .89])/10.0
+    sigmas = np.array([.26, .25, .25, .35, .35, .79, .79, .72, .72, .62, .62, 1.07, 1.07, .87, .87, .89, .89, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])/10.0
     variance = (sigmas * 2)**2
     # compute oks between each detection and ground truth object
     for gt_idx, gt_points in enumerate(annotation_points):

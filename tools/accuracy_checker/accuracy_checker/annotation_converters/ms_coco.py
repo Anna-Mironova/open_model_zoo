@@ -278,6 +278,49 @@ class MSCocoKeypointsConverter(BaseFormatConverter):
                 if progress_callback is not None and image_id & progress_interval == 0:
                     progress_callback(image_id / num_iterations * 100)
             return ConverterReturn(keypoints_annotations, {'label_map': label_map}, None)
+        if self.specific_annotation_file and self.annotation_file:
+            full_specific_annotation = read_json(self.specific_annotation_file)
+            full_annotation = read_json(self.annotation_file)
+            image_info = full_specific_annotation['images']
+            annotations = full_specific_annotation['annotations']
+            general_annotations = full_annotation['annotations']
+            label_map, _ = get_label_map(self.dataset_meta, full_specific_annotation, True)
+            num_iterations = len(image_info)
+            for image_id, image in enumerate(image_info):
+                identifier = image['file_name']
+                if check_content:
+                    full_image_path = self.images_dir / identifier
+                    if not check_file_existence(full_image_path):
+                        content_errors.append('{}: does not exist'.format(full_image_path))
+                image_annotation = get_image_annotation(image['id'], annotations)
+                image_general_annotation = get_image_annotation(image['id'], general_annotations)
+                if not image_annotation or not image_general_annotation:
+                    continue
+                x_vals, y_vals, visibility, labels, areas, is_crowd, bboxes, difficult = [], [], [], [], [], [], [], []
+                for target, target_general in zip(image_annotation, image_general_annotation):
+                    if target['num_keypoints'] == 0:
+                        difficult.append(len(x_vals))
+                    labels.append(target['category_id'])
+                    keypoints = target_general['keypoints']
+                    keypoints.extend(target['keypoints'])
+                    x_vals.append(keypoints[::3])
+                    y_vals.append(keypoints[1::3])
+                    visibility.append(keypoints[2::3])
+                    areas.append(target['area'])
+                    bboxes.append(convert_bboxes_xywh_to_x1y1x2y2(*target['bbox']))
+                    is_crowd.append(target['iscrowd'])
+                keypoints_annotation = PoseEstimationAnnotation(
+                    identifier, np.array(x_vals), np.array(y_vals), np.array(visibility), np.array(labels)
+                )
+                keypoints_annotation.metadata['areas'] = areas
+                keypoints_annotation.metadata['rects'] = bboxes
+                keypoints_annotation.metadata['iscrowd'] = is_crowd
+                keypoints_annotation.metadata['difficult_boxes'] = difficult
+
+                keypoints_annotations.append(keypoints_annotation)
+                if progress_callback is not None and image_id & progress_interval == 0:
+                    progress_callback(image_id / num_iterations * 100)
+            return ConverterReturn(keypoints_annotations, {'label_map': label_map}, None)
 
 
 class MSCocoSegmentationConverter(MSCocoDetectionConverter):

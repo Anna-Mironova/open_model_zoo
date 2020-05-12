@@ -107,7 +107,8 @@ datasets:
     data_source: val2017
     annotation_conversion:
       converter: mscoco_keypoints
-      annotation_file: person_keypoints_val2017.json
+      specific_annotation_file: /home/annamiro/Downloads/person_keypoints_val2017_foot_v1.json
+      annotation_file: annotations/person_keypoints_val2017.json
     annotation: mscoco_keypoints.pickle
     dataset_meta: mscoco_keypoints.json
     metrics:

@@ -13,8 +13,6 @@
  See the License for the specific language governing permissions and
  limitations under the License.
 """
-import itertools
-import math
 import numpy as np
 import os
 import cv2
@@ -223,6 +221,15 @@ class Detector(object):
 
         return keep
 
+    @staticmethod
+    def cast_to_int(detections):
+        for i, detection in enumerate(detections):
+            detections[i] = detection._replace(x_min=np.rint(detection.x_min),
+                                                   y_min=np.rint(detection.y_min),
+                                                   x_max=np.rint(detection.x_max),
+                                                   y_max=np.rint(detection.y_max))
+        return detections
+
     def preprocess(self, image):
         return cv2.resize(image, (self.input_width, self.input_height))
 
@@ -242,7 +249,7 @@ class Detector(object):
         landmark = namedtuple('landmark', 'landmark_x_coord, landmark_y_coord')
         detections = []
         res_landmarks = []
-        x_scale, y_scale = float(self.input_width) / image_sizes[0], float(self.input_height) /image_sizes[1]
+        x_scale, y_scale = float(self.input_width) / image_sizes[1], float(self.input_height) /image_sizes[0]
         for _idx, s in enumerate(self._features_stride_fpn):
             anchor_num = self._num_anchors[s]
             scores = self._get_scores(raw_output[self.scores_output[_idx]], anchor_num)
@@ -271,24 +278,17 @@ class Detector(object):
 
         for score, x_min, y_min, x_max, y_max in zip(scores, x_mins, y_mins, x_maxs, y_maxs):
              detections.append(detection(score=score, x_min=x_min / x_scale, y_min=y_min / y_scale, x_max=x_max / x_scale, y_max=y_max / y_scale))
+        detections = self.cast_to_int(detections)
 
         if self.landmarks_output:
             landmarks_x_coords = np.array(landmarks_list)[:, :, ::2].reshape(len(landmarks_list), -1) / x_scale
+            landmarks_x_coords = np.rint(landmarks_x_coords)
             landmarks_y_coords = np.array(landmarks_list)[:, :, 1::2].reshape(len(landmarks_list), -1) / y_scale
+            landmarks_y_coords = np.rint(landmarks_y_coords)
             for landmark_x_coord, landmark_y_coord in zip(landmarks_x_coords, landmarks_y_coords):
                  res_landmarks.append(landmark(landmark_x_coord=landmark_x_coord, landmark_y_coord=landmark_y_coord))
 
         return detections, mask_scores_list, res_landmarks
-
-        # postprocessing:
-        #   - type: cast_to_int
-        #   - type: clip_boxes
-        #     size: 1024
-        #     apply_to: annotation
-        #   - type: filter
-        #     apply_to: annotation
-        #     height_range: 64, 1024
-        #     is_empty: True
 
     def detect(self, image):
         image_sizes = image.shape[:2]

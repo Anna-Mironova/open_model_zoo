@@ -19,7 +19,6 @@
 import os
 import sys
 import cv2
-import numpy as np
 from argparse import ArgumentParser, SUPPRESS
 
 from openvino.inference_engine import IECore
@@ -122,7 +121,7 @@ def main():
                     x = int(x)
                     y = int(y)
                     color = (255, 0, 0)
-                    cv2.circle(img, (x, y), 1, color, 2)
+                    cv2.circle(frame, (x, y), 1, color, 2)
 
         cv2.putText(frame, 'summary: {:.1f} FPS'.format(
             1.0 / detector.infer_time), (5, 15), cv2.FONT_HERSHEY_COMPLEX, 0.5, (0, 0, 200))

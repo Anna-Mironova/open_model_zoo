@@ -122,6 +122,10 @@ def main():
                 for x, y in zip(landmark_x_coord, landmark_y_coord):
                     x = int(x)
                     y = int(y)
+                    if x < 0 and x > frame.shape[1]:
+                        continue
+                    if y < 0 and y > frame.shape[0]:
+                        continue
                     color = (255, 0, 0)
                     cv2.circle(frame, (x, y), 1, color, 2)
 

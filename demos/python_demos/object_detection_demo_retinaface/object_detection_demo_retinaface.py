@@ -101,8 +101,7 @@ def main():
     for frame in frames_reader:
         detections, mask_scores, landmarks = detector.detect(frame)
         presenter.drawGraphs(frame)
-        for i, detection in enumerate(detections):
-            score, x_min, y_min, x_max, y_max = detection.score, detection.x_min, detection.y_min, detection.x_max, detection.y_max
+        for i, (score, x_min, y_min, x_max, y_max) in enumerate(detections):
             x_min = int(max(0, x_min))
             y_min = int(max(0, y_min))
             x_max = int(min(frame.shape[1], x_max))

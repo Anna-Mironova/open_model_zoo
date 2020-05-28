@@ -197,14 +197,6 @@ class Detector(object):
         return pred
 
     @staticmethod
-    def clip_boxes(boxes, im_shape):
-        boxes[:, 0::4] = np.maximum(np.minimum(boxes[:, 0::4], im_shape[1] - 1), 0)
-        boxes[:, 1::4] = np.maximum(np.minimum(boxes[:, 1::4], im_shape[0] - 1), 0)
-        boxes[:, 2::4] = np.maximum(np.minimum(boxes[:, 2::4], im_shape[1] - 1), 0)
-        boxes[:, 3::4] = np.maximum(np.minimum(boxes[:, 3::4], im_shape[0] - 1), 0)
-        return boxes
-
-    @staticmethod
     def nms(x1, y1, x2, y2, scores, thresh, include_boundaries=True, keep_top_k=None):
         b = 1 if include_boundaries else 0
 
@@ -235,29 +227,6 @@ class Detector(object):
 
         return keep
 
-    @staticmethod
-    def cast_to_int(detections):
-        for i, detection in enumerate(detections):
-            detections[i] = detection._replace(x_min=np.rint(detection.x_min),
-                                                   y_min=np.rint(detection.y_min),
-                                                   x_max=np.rint(detection.x_max),
-                                                   y_max=np.rint(detection.y_max))
-        return detections
-
-    @staticmethod
-    def calculate_scales(image_sizes):
-        scales = [640, 1080]
-        target_size = scales[0]
-        max_size = scales[1]
-        im_size_min = np.min(image_sizes)
-        im_size_max = np.max(image_sizes)
-
-        im_scale = float(target_size) / float(im_size_min)
-
-        if np.round(im_scale * im_size_max) > max_size:
-            im_scale = float(max_size) / float(im_size_max)
-        return im_scale
-
     def preprocess(self, image):
         return cv2.resize(image, (self.input_width, self.input_height), interpolation=cv2.INTER_LINEAR)
 
@@ -268,7 +237,19 @@ class Detector(object):
         self.infer_time = (cv2.getTickCount() - t0) / cv2.getTickFrequency()
         return output
 
-    def postprocess(self, raw_output, image_sizes):
+    def postprocess(self, raw_output, x_scale, y_scale):
+        bboxes_outputs = [raw_output[name][0] for name in raw_output if re.search('.bbox.', name)]
+        bboxes_outputs.sort(key=lambda x: x.shape[1])
+
+        scores_outputs = [raw_output[name][0] for name in raw_output if re.search('.cls.', name)]
+        scores_outputs.sort(key=lambda x: x.shape[1])
+
+        landmarks_outputs = [raw_output[name][0] for name in raw_output if re.search('.landmark.', name)]
+        landmarks_outputs.sort(key=lambda x: x.shape[1])
+        if self.type_scores_output:
+            type_scores_outputs = [raw_output[name][0] for name in raw_output if re.search('.type.', name)]
+            type_scores_outputs.sort(key=lambda x: x.shape[1])
+
         proposals_list = []
         scores_list = []
         landmarks_list = []
@@ -277,19 +258,15 @@ class Detector(object):
         landmark = namedtuple('landmark', 'landmark_x_coord, landmark_y_coord')
         detections = []
         res_landmarks = []
-        x_scale = self.calculate_scales(image_sizes)
-        y_scale = self.calculate_scales(image_sizes)
-        #x_scale, y_scale = float(self.input_width) / image_sizes[1], float(self.input_height) /image_sizes[0]
         for _idx, s in enumerate(self._features_stride_fpn):
             anchor_num = self._num_anchors[s]
-            scores = self._get_scores(raw_output[self.scores_output[_idx]], anchor_num)
-            bbox_deltas = raw_output[self.bboxes_output[_idx]]
+            scores = self._get_scores(scores_outputs[_idx], anchor_num)
+            bbox_deltas = bboxes_outputs[_idx]
             height, width = bbox_deltas.shape[1], bbox_deltas.shape[2]
             anchors_fpn = self._anchors_fpn[s]
             anchors = self.anchors_plane(height, width, int(s), anchors_fpn)
             anchors = anchors.reshape((height * width * anchor_num, 4))
             proposals = self._get_proposals(bbox_deltas, anchor_num, anchors)
-            proposals = self.clip_boxes(proposals, image_sizes)
             mask = scores > self.threshold
             proposals, scores = proposals[mask, :], scores[mask]
             x_mins, y_mins, x_maxs, y_maxs = proposals.T
@@ -298,32 +275,23 @@ class Detector(object):
                 proposals_list.extend(proposals[keep])
                 scores_list.extend(scores[keep])
                 if self.type_scores_output:
-                    mask_scores = self._get_mask_scores(raw_output[self.type_scores_output[_idx]], anchor_num)[mask]
+                    mask_scores = self._get_mask_scores(type_scores_outputs[_idx], anchor_num)[mask]
                     mask_scores_list.extend(mask_scores[keep])
                 if self.landmarks_output:
-                    landmarks = self._get_landmarks(raw_output[self.landmarks_output[_idx]],
-                                                anchor_num, anchors)[mask, :]
+                    landmarks = self._get_landmarks(landmarks_outputs[_idx],
+                                                    anchor_num, anchors)[mask, :]
                     landmarks_list.extend(landmarks[keep, :])
         scores = np.reshape(scores_list, -1)
         x_mins, y_mins, x_maxs, y_maxs = np.array(proposals_list).T # pylint: disable=E0633
 
+        x_mins, x_maxs, y_mins, y_maxs = x_mins / x_scale, x_maxs / x_scale, y_mins / y_scale, y_maxs / y_scale
+
         for score, x_min, y_min, x_max, y_max in zip(scores, x_mins, y_mins, x_maxs, y_maxs):
-            detections.append(
-                detection(score=score, x_min=x_min * x_scale, y_min=y_min * y_scale, x_max=x_max * x_scale,
-                          y_max=y_max * y_scale))
-                #detection(score=score, x_min=x_min, y_min=y_min, x_max=x_max , y_max=y_max))
-                # detection(score=score, x_min=x_min/ self.input_width, y_min=y_min/ self.input_height, x_max=x_max/ self.input_width,
-                #           y_max=y_max/ self.input_height))
-             #detections.append(detection(score=score, x_min=x_min / x_scale, y_min=y_min / y_scale, x_max=x_max / x_scale, y_max=y_max / y_scale))
-        detections = self.cast_to_int(detections)
+             detections.append(detection(score=score, x_min=x_min, y_min=y_min, x_max=x_max, y_max=y_max))
 
         if self.landmarks_output:
-            # landmarks_x_coords = np.array(landmarks_list)[:, :, ::2].reshape(len(landmarks_list), -1) / x_scale
-            landmarks_x_coords = np.array(landmarks_list)[:, :, ::2].reshape(len(landmarks_list), -1)
-            landmarks_x_coords = np.rint(landmarks_x_coords)
-            # landmarks_y_coords = np.array(landmarks_list)[:, :, 1::2].reshape(len(landmarks_list), -1) / y_scale
-            landmarks_y_coords = np.array(landmarks_list)[:, :, 1::2].reshape(len(landmarks_list), -1)
-            landmarks_y_coords = np.rint(landmarks_y_coords)
+            landmarks_x_coords = np.array(landmarks_list)[:, :, ::2].reshape(len(landmarks_list), -1) / x_scale
+            landmarks_y_coords = np.array(landmarks_list)[:, :, 1::2].reshape(len(landmarks_list), -1) / y_scale
             for landmark_x_coord, landmark_y_coord in zip(landmarks_x_coords, landmarks_y_coords):
                  res_landmarks.append(landmark(landmark_x_coord=landmark_x_coord, landmark_y_coord=landmark_y_coord))
 
@@ -333,6 +301,9 @@ class Detector(object):
         image_sizes = image.shape[:2]
         image = self.preprocess(image)
         image = np.transpose(image, (2, 0, 1))
+        image = np.expand_dims(image, axis=0)
         output = self.infer(image)
-        detections, mask_scores_list, landmarks = self.postprocess({name:output[name][0] for name in self._output_layer_names}, image_sizes)
+        x_scale = self.input_width / image_sizes[1]
+        y_scale = self.input_height / image_sizes[0]
+        detections, mask_scores_list, landmarks = self.postprocess(output, x_scale, y_scale)
         return detections, mask_scores_list, landmarks

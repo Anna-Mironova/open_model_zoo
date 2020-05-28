@@ -39,7 +39,6 @@ class Detector(object):
         self.threshold = threshold
 
         _ratio = (1.,)
-        self.landmark_std = 0.2
         self.anchor_cfg = {
             32: {'SCALES': (32, 16), 'BASE_SIZE': 16, 'RATIOS': _ratio},
             16: {'SCALES': (8, 4), 'BASE_SIZE': 16, 'RATIOS': _ratio},
@@ -55,6 +54,11 @@ class Detector(object):
         self.scores_output = self.create_list_outputs_name(self._output_layer_names, "cls_prob")
         self.landmarks_output = self.create_list_outputs_name(self._output_layer_names, "landmark_pred")
         self.type_scores_output = self.create_list_outputs_name(self._output_layer_names, "type_prob")
+
+        if self.type_scores_output:
+            self.landmark_std = 0.2
+        else:
+            self.landmark_std = 1.0
 
     @staticmethod
     def create_list_outputs_name(output_names, pattern):
@@ -304,13 +308,19 @@ class Detector(object):
         x_mins, y_mins, x_maxs, y_maxs = np.array(proposals_list).T # pylint: disable=E0633
 
         for score, x_min, y_min, x_max, y_max in zip(scores, x_mins, y_mins, x_maxs, y_maxs):
-             detections.append(detection(score=score, x_min=x_min / x_scale, y_min=y_min / y_scale, x_max=x_max / x_scale, y_max=y_max / y_scale))
+            detections.append(
+                detection(score=score, x_min=x_min, y_min=y_min, x_max=x_max , y_max=y_max))
+                # detection(score=score, x_min=x_min/ self.input_width, y_min=y_min/ self.input_height, x_max=x_max/ self.input_width,
+                #           y_max=y_max/ self.input_height))
+             #detections.append(detection(score=score, x_min=x_min / x_scale, y_min=y_min / y_scale, x_max=x_max / x_scale, y_max=y_max / y_scale))
         detections = self.cast_to_int(detections)
 
         if self.landmarks_output:
-            landmarks_x_coords = np.array(landmarks_list)[:, :, ::2].reshape(len(landmarks_list), -1) / x_scale
+            # landmarks_x_coords = np.array(landmarks_list)[:, :, ::2].reshape(len(landmarks_list), -1) / x_scale
+            landmarks_x_coords = np.array(landmarks_list)[:, :, ::2].reshape(len(landmarks_list), -1)
             landmarks_x_coords = np.rint(landmarks_x_coords)
-            landmarks_y_coords = np.array(landmarks_list)[:, :, 1::2].reshape(len(landmarks_list), -1) / y_scale
+            # landmarks_y_coords = np.array(landmarks_list)[:, :, 1::2].reshape(len(landmarks_list), -1) / y_scale
+            landmarks_y_coords = np.array(landmarks_list)[:, :, 1::2].reshape(len(landmarks_list), -1)
             landmarks_y_coords = np.rint(landmarks_y_coords)
             for landmark_x_coord, landmark_y_coord in zip(landmarks_x_coords, landmarks_y_coords):
                  res_landmarks.append(landmark(landmark_x_coord=landmark_x_coord, landmark_y_coord=landmark_y_coord))

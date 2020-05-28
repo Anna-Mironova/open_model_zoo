@@ -259,7 +259,7 @@ class Detector(object):
         return im_scale
 
     def preprocess(self, image):
-        return cv2.resize(image, (self.input_width, self.input_height))
+        return cv2.resize(image, (self.input_width, self.input_height), interpolation=cv2.INTER_LINEAR)
 
     def infer(self, image):
         t0 = cv2.getTickCount()
@@ -309,7 +309,9 @@ class Detector(object):
 
         for score, x_min, y_min, x_max, y_max in zip(scores, x_mins, y_mins, x_maxs, y_maxs):
             detections.append(
-                detection(score=score, x_min=x_min, y_min=y_min, x_max=x_max , y_max=y_max))
+                detection(score=score, x_min=x_min * x_scale, y_min=y_min * y_scale, x_max=x_max * x_scale,
+                          y_max=y_max * y_scale))
+                #detection(score=score, x_min=x_min, y_min=y_min, x_max=x_max , y_max=y_max))
                 # detection(score=score, x_min=x_min/ self.input_width, y_min=y_min/ self.input_height, x_max=x_max/ self.input_width,
                 #           y_max=y_max/ self.input_height))
              #detections.append(detection(score=score, x_min=x_min / x_scale, y_min=y_min / y_scale, x_max=x_max / x_scale, y_max=y_max / y_scale))

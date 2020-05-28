@@ -40,6 +40,10 @@ def build_argparser():
                       help="Optional. Specify the target device to infer on; CPU, GPU, FPGA, HDDL or MYRIAD is "
                            "acceptable. The demo will look for a suitable plugin for device specified. "
                            "Default value is CPU", default="CPU", type=str)
+    args.add_argument("-pt", "--prob_threshold", help="Optional. Probability threshold for detections filtering",
+                      default=0.8, type=float)
+    args.add_argument("-mt", "--mask_threshold", help="Optional. Probability threshold for mask detections filtering",
+                      default=0.2, type=float)
     args.add_argument("--no_show", help="Optional. Don't show output", action='store_true')
     args.add_argument("-u", "--utilization_monitors", default="", type=str,
                       help="Optional. List of monitors to show initially.")
@@ -86,11 +90,9 @@ class VideoReader(object):
 
 def main():
     args = build_argparser().parse_args()
-    mask_thresh = 0.2
-    thresh = 0.8
 
     ie = IECore()
-    detector = Detector(ie, args.model, args.device, thresh)
+    detector = Detector(ie, args.model, args.device, args.prob_threshold)
 
     img = cv2.imread(args.input[0], cv2.IMREAD_COLOR)
     frames_reader, delay = (VideoReader(args.input), 1) if img is None else (ImageReader(args.input), 0)
@@ -107,7 +109,7 @@ def main():
             y_max = int(min(frame.shape[0], y_max))
             color = (12.5, 7.0, 3.0)
             if mask_scores:
-                if mask_scores[i] >= mask_thresh:
+                if mask_scores[i] >= args.mask_threshold:
                     color = (0, 0, 255)
                 else:
                     color = (0, 255, 0)

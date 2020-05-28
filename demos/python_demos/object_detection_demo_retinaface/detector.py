@@ -20,7 +20,7 @@ import re
 from collections import namedtuple
 
 class Detector(object):
-    def __init__(self, ie, model_path, device='CPU', threshold=0.5):
+    def __init__(self, ie, model_path, device='CPU', threshold=0.8):
         model = ie.read_network(model=model_path, weights=os.path.splitext(model_path)[0] + '.bin')
 
         assert len(model.inputs) == 1, "Expected 1 input blob"
@@ -39,6 +39,7 @@ class Detector(object):
         self.threshold = threshold
 
         _ratio = (1.,)
+        self.landmark_std = 0.2
         self.anchor_cfg = {
             32: {'SCALES': (32, 16), 'BASE_SIZE': 16, 'RATIOS': _ratio},
             16: {'SCALES': (8, 4), 'BASE_SIZE': 16, 'RATIOS': _ratio},
@@ -131,6 +132,7 @@ class Detector(object):
     def _get_landmarks(self, landmark_deltas, anchor_num, anchors):
         landmark_pred_len = landmark_deltas.shape[0] // anchor_num
         landmark_deltas = landmark_deltas.transpose((1, 2, 0)).reshape((-1, 5, landmark_pred_len // 5))
+        landmark_deltas *= self.landmark_std
         landmarks = self.landmark_pred(anchors, landmark_deltas)
         return landmarks
 
@@ -191,6 +193,14 @@ class Detector(object):
         return pred
 
     @staticmethod
+    def clip_boxes(boxes, im_shape):
+        boxes[:, 0::4] = np.maximum(np.minimum(boxes[:, 0::4], im_shape[1] - 1), 0)
+        boxes[:, 1::4] = np.maximum(np.minimum(boxes[:, 1::4], im_shape[0] - 1), 0)
+        boxes[:, 2::4] = np.maximum(np.minimum(boxes[:, 2::4], im_shape[1] - 1), 0)
+        boxes[:, 3::4] = np.maximum(np.minimum(boxes[:, 3::4], im_shape[0] - 1), 0)
+        return boxes
+
+    @staticmethod
     def nms(x1, y1, x2, y2, scores, thresh, include_boundaries=True, keep_top_k=None):
         b = 1 if include_boundaries else 0
 
@@ -230,6 +240,20 @@ class Detector(object):
                                                    y_max=np.rint(detection.y_max))
         return detections
 
+    @staticmethod
+    def calculate_scales(image_sizes):
+        scales = [640, 1080]
+        target_size = scales[0]
+        max_size = scales[1]
+        im_size_min = np.min(image_sizes)
+        im_size_max = np.max(image_sizes)
+
+        im_scale = float(target_size) / float(im_size_min)
+
+        if np.round(im_scale * im_size_max) > max_size:
+            im_scale = float(max_size) / float(im_size_max)
+        return im_scale
+
     def preprocess(self, image):
         return cv2.resize(image, (self.input_width, self.input_height))
 
@@ -249,7 +273,9 @@ class Detector(object):
         landmark = namedtuple('landmark', 'landmark_x_coord, landmark_y_coord')
         detections = []
         res_landmarks = []
-        x_scale, y_scale = float(self.input_width) / image_sizes[1], float(self.input_height) /image_sizes[0]
+        x_scale = self.calculate_scales(image_sizes)
+        y_scale = self.calculate_scales(image_sizes)
+        #x_scale, y_scale = float(self.input_width) / image_sizes[1], float(self.input_height) /image_sizes[0]
         for _idx, s in enumerate(self._features_stride_fpn):
             anchor_num = self._num_anchors[s]
             scores = self._get_scores(raw_output[self.scores_output[_idx]], anchor_num)
@@ -259,6 +285,7 @@ class Detector(object):
             anchors = self.anchors_plane(height, width, int(s), anchors_fpn)
             anchors = anchors.reshape((height * width * anchor_num, 4))
             proposals = self._get_proposals(bbox_deltas, anchor_num, anchors)
+            proposals = self.clip_boxes(proposals, image_sizes)
             mask = scores > self.threshold
             proposals, scores = proposals[mask, :], scores[mask]
             x_mins, y_mins, x_maxs, y_maxs = proposals.T

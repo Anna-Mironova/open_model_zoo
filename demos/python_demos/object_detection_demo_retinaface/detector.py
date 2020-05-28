@@ -269,8 +269,8 @@ class Detector(object):
             proposals = self._get_proposals(bbox_deltas, anchor_num, anchors)
             mask = scores > self.threshold
             proposals, scores = proposals[mask, :], scores[mask]
-            x_mins, y_mins, x_maxs, y_maxs = proposals.T
             if scores.size != 0:
+                x_mins, y_mins, x_maxs, y_maxs = proposals.T
                 keep = self.nms(x_mins, y_mins, x_maxs, y_maxs, scores, 0.5, False)
                 proposals_list.extend(proposals[keep])
                 scores_list.extend(scores[keep])
@@ -281,19 +281,20 @@ class Detector(object):
                     landmarks = self._get_landmarks(landmarks_outputs[_idx],
                                                     anchor_num, anchors)[mask, :]
                     landmarks_list.extend(landmarks[keep, :])
-        scores = np.reshape(scores_list, -1)
-        x_mins, y_mins, x_maxs, y_maxs = np.array(proposals_list).T # pylint: disable=E0633
+        if len(scores_list) != 0:
+            scores = np.reshape(scores_list, -1)
+            x_mins, y_mins, x_maxs, y_maxs = np.array(proposals_list).T # pylint: disable=E0633
 
-        x_mins, x_maxs, y_mins, y_maxs = x_mins / x_scale, x_maxs / x_scale, y_mins / y_scale, y_maxs / y_scale
+            x_mins, x_maxs, y_mins, y_maxs = x_mins / x_scale, x_maxs / x_scale, y_mins / y_scale, y_maxs / y_scale
 
-        for score, x_min, y_min, x_max, y_max in zip(scores, x_mins, y_mins, x_maxs, y_maxs):
-             detections.append(detection(score=score, x_min=x_min, y_min=y_min, x_max=x_max, y_max=y_max))
+            for score, x_min, y_min, x_max, y_max in zip(scores, x_mins, y_mins, x_maxs, y_maxs):
+                 detections.append(detection(score=score, x_min=x_min, y_min=y_min, x_max=x_max, y_max=y_max))
 
-        if self.landmarks_output:
-            landmarks_x_coords = np.array(landmarks_list)[:, :, ::2].reshape(len(landmarks_list), -1) / x_scale
-            landmarks_y_coords = np.array(landmarks_list)[:, :, 1::2].reshape(len(landmarks_list), -1) / y_scale
-            for landmark_x_coord, landmark_y_coord in zip(landmarks_x_coords, landmarks_y_coords):
-                 res_landmarks.append(landmark(landmark_x_coord=landmark_x_coord, landmark_y_coord=landmark_y_coord))
+            if self.landmarks_output:
+                landmarks_x_coords = np.array(landmarks_list)[:, :, ::2].reshape(len(landmarks_list), -1) / x_scale
+                landmarks_y_coords = np.array(landmarks_list)[:, :, 1::2].reshape(len(landmarks_list), -1) / y_scale
+                for landmark_x_coord, landmark_y_coord in zip(landmarks_x_coords, landmarks_y_coords):
+                     res_landmarks.append(landmark(landmark_x_coord=landmark_x_coord, landmark_y_coord=landmark_y_coord))
 
         return detections, mask_scores_list, res_landmarks
 

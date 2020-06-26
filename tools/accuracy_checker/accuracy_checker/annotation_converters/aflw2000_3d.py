@@ -2,6 +2,7 @@ import numpy as np
 from ..config import ConfigError
 from ..representation import FacialLandmarks3DAnnotation
 from .format_converter import DirectoryBasedAnnotationConverter, ConverterReturn
+from ..utils import loadmat
 
 try:
     import scipy.io as scipy_io
@@ -32,6 +33,7 @@ class AFLW20003DConverter(DirectoryBasedAnnotationConverter):
                 continue
 
             image_info = scipy_io.loadmat(str(annotation_file))
+            image_info = loadmat(str(annotation_file))
             x_values, y_values, z_values = image_info['pt3d_68']
             x_min, y_min = np.min(x_values), np.min(y_values)
             x_max, y_max = np.max(x_values), np.max(y_values)

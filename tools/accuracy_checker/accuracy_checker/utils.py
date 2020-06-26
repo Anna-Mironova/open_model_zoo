@@ -27,6 +27,18 @@ from typing import Union
 from warnings import warn
 from collections.abc import MutableSet
 
+from scipy._lib.six import string_types
+import scipy
+from functools import reduce
+import sys
+
+if sys.version_info[0] >= 3:
+    byteord = int
+else:
+    byteord = ord
+
+from numpy.compat import asstr
+
 import numpy as np
 import yaml
 
@@ -518,3 +530,438 @@ def color_format(s, color=Color.PASSED):
 
 def softmax(x):
     return np.exp(x) / sum(np.exp(x))
+
+def loadmat(file_name, mdict=None, appendmat=True, **kwargs):
+    variable_names = kwargs.pop('variable_names', None)
+    with open_file(file_name, appendmat) as f:
+        MR = mat_reader_factory(f, **kwargs)
+        matfile_dict = MR.get_variables(variable_names)
+
+    if mdict is not None:
+        mdict.update(matfile_dict)
+    else:
+        mdict = matfile_dict
+
+    return mdict
+
+def open_file(file_like, appendmat, mode='rb'):
+    reqs = {'read'} if set(mode) & set('r+') else set()
+    if set(mode) & set('wax+'):
+        reqs.add('write')
+    if reqs.issubset(dir(file_like)):
+        return file_like
+
+    try:
+        return open(file_like, mode)
+    except IOError:
+        # Probably "not found"
+        if isinstance(file_like, string_types):
+            if appendmat and not file_like.endswith('.mat'):
+                file_like += '.mat'
+            return open(file_like, mode)
+        else:
+            raise IOError('Reader needs file name or open file-like object')
+
+def mat_reader_factory(file_name, appendmat=True, **kwargs):
+    byte_stream = open_file(file_name, appendmat)
+    mjv, mnv = get_matfile_version(byte_stream)
+    #if mjv == 0:
+    #    return MatFile4Reader(byte_stream, **kwargs)
+    if mjv == 1:
+        return MatFile5Reader(byte_stream, **kwargs)
+    elif mjv == 2:
+        raise NotImplementedError('Please use HDF reader for matlab v7.3 files')
+    else:
+        raise TypeError('Did not recognize version %s' % mjv)
+
+def get_matfile_version(fileobj):
+    fileobj.seek(0)
+    mopt_bytes = fileobj.read(4)
+    if len(mopt_bytes) == 0:
+        raise ValueError("Mat file appears to be empty")
+    mopt_ints = np.ndarray(shape=(4,), dtype=np.uint8, buffer=mopt_bytes)
+    if 0 in mopt_ints:
+        fileobj.seek(0)
+        return (0,0)
+    fileobj.seek(124)
+    tst_str = fileobj.read(4)
+    fileobj.seek(0)
+    maj_ind = int(tst_str[2] == b'I'[0])
+    maj_val = byteord(tst_str[maj_ind])
+    min_val = byteord(tst_str[1-maj_ind])
+    ret = (maj_val, min_val)
+    if maj_val in (1, 2):
+        return ret
+    raise ValueError('Unknown mat file type, version %s, %s' % ret)
+
+sys_is_le = sys.byteorder == 'little'
+native_code = sys_is_le and '<' or '>'
+swapped_code = sys_is_le and '>' or '<'
+
+aliases = {'little': ('little', '<', 'l', 'le'),
+           'big': ('big', '>', 'b', 'be'),
+           'native': ('native', '='),
+           'swapped': ('swapped', 'S')}
+
+class MatFileReader(object):
+    def __init__(self, mat_stream,
+                 byte_order=None,
+                 mat_dtype=False,
+                 squeeze_me=False,
+                 chars_as_strings=True,
+                 matlab_compatible=False,
+                 struct_as_record=True,
+                 verify_compressed_data_integrity=True
+                 ):
+        self.mat_stream = mat_stream
+        self.dtypes = {}
+        if not byte_order:
+            byte_order = self.guess_byte_order()
+        else:
+            byte_order = self.to_numpy_code(byte_order)
+        self.byte_order = byte_order
+        self.struct_as_record = struct_as_record
+        if matlab_compatible:
+            self.set_matlab_compatible()
+        else:
+            self.squeeze_me = squeeze_me
+            self.chars_as_strings = chars_as_strings
+            self.mat_dtype = mat_dtype
+        self.verify_compressed_data_integrity = verify_compressed_data_integrity
+
+    def set_matlab_compatible(self):
+        self.mat_dtype = True
+        self.squeeze_me = False
+        self.chars_as_strings = False
+
+    def guess_byte_order(self):
+        return native_code
+
+    def end_of_stream(self):
+        b = self.mat_stream.read(1)
+        curpos = self.mat_stream.tell()
+        self.mat_stream.seek(curpos - 1)
+        return len(b) == 0
+
+    def to_numpy_code(code):
+        code = code.lower()
+        if code is None:
+            return native_code
+        if code in aliases['little']:
+            return '<'
+        elif code in aliases['big']:
+            return '>'
+        elif code in aliases['native']:
+            return native_code
+        elif code in aliases['swapped']:
+            return swapped_code
+        else:
+            raise ValueError(
+                'We cannot handle byte order %s' % code)
+
+mxCELL_CLASS = 1
+mxSTRUCT_CLASS = 2
+mxOBJECT_CLASS = 3
+mxCHAR_CLASS = 4
+mxSPARSE_CLASS = 5
+mxDOUBLE_CLASS = 6
+mxSINGLE_CLASS = 7
+mxINT8_CLASS = 8
+mxUINT8_CLASS = 9
+mxINT16_CLASS = 10
+mxUINT16_CLASS = 11
+mxINT32_CLASS = 12
+mxUINT32_CLASS = 13
+mxINT64_CLASS = 14
+mxUINT64_CLASS = 15
+mxFUNCTION_CLASS = 16
+mxOPAQUE_CLASS = 17
+mxOBJECT_CLASS_FROM_MATRIX_H = 18
+
+mclass_info = {
+    mxINT8_CLASS: 'int8',
+    mxUINT8_CLASS: 'uint8',
+    mxINT16_CLASS: 'int16',
+    mxUINT16_CLASS: 'uint16',
+    mxINT32_CLASS: 'int32',
+    mxUINT32_CLASS: 'uint32',
+    mxINT64_CLASS: 'int64',
+    mxUINT64_CLASS: 'uint64',
+    mxSINGLE_CLASS: 'single',
+    mxDOUBLE_CLASS: 'double',
+    mxCELL_CLASS: 'cell',
+    mxSTRUCT_CLASS: 'struct',
+    mxOBJECT_CLASS: 'object',
+    mxCHAR_CLASS: 'char',
+    mxSPARSE_CLASS: 'sparse',
+    mxFUNCTION_CLASS: 'function',
+    mxOPAQUE_CLASS: 'opaque',
+    }
+
+def convert_dtypes(dtype_template, order_code):
+    dtypes = dtype_template.copy()
+    for k in dtypes:
+        dtypes[k] = np.dtype(dtypes[k]).newbyteorder(order_code)
+    return dtypes
+
+def _convert_codecs(template, byte_order):
+    codecs = {}
+    postfix = byte_order == '<' and '_le' or '_be'
+    for k, v in template.items():
+        codec = v['codec']
+        try:
+            " ".encode(codec)
+        except LookupError:
+            codecs[k] = None
+            continue
+        if v['width'] > 1:
+            codec += postfix
+        codecs[k] = codec
+    return codecs.copy()
+
+miINT8 = 1
+miUINT8 = 2
+miINT16 = 3
+miUINT16 = 4
+miINT32 = 5
+miUINT32 = 6
+miSINGLE = 7
+miDOUBLE = 9
+miINT64 = 12
+miUINT64 = 13
+miMATRIX = 14
+miCOMPRESSED = 15
+miUTF8 = 16
+miUTF16 = 17
+miUTF32 = 18
+
+mdtypes_template = {
+    miINT8: 'i1',
+    miUINT8: 'u1',
+    miINT16: 'i2',
+    miUINT16: 'u2',
+    miINT32: 'i4',
+    miUINT32: 'u4',
+    miSINGLE: 'f4',
+    miDOUBLE: 'f8',
+    miINT64: 'i8',
+    miUINT64: 'u8',
+    miUTF8: 'u1',
+    miUTF16: 'u2',
+    miUTF32: 'u4',
+    'file_header': [('description', 'S116'),
+                    ('subsystem_offset', 'i8'),
+                    ('version', 'u2'),
+                    ('endian_test', 'S2')],
+    'tag_full': [('mdtype', 'u4'), ('byte_count', 'u4')],
+    'tag_smalldata':[('byte_count_mdtype', 'u4'), ('data', 'S4')],
+    'array_flags': [('data_type', 'u4'),
+                    ('byte_count', 'u4'),
+                    ('flags_class','u4'),
+                    ('nzmax', 'u4')],
+    'U1': 'U1',
+    }
+
+mclass_dtypes_template = {
+    mxINT8_CLASS: 'i1',
+    mxUINT8_CLASS: 'u1',
+    mxINT16_CLASS: 'i2',
+    mxUINT16_CLASS: 'u2',
+    mxINT32_CLASS: 'i4',
+    mxUINT32_CLASS: 'u4',
+    mxINT64_CLASS: 'i8',
+    mxUINT64_CLASS: 'u8',
+    mxSINGLE_CLASS: 'f4',
+    mxDOUBLE_CLASS: 'f8',
+    }
+
+codecs_template = {
+    miUTF8: {'codec': 'utf_8', 'width': 1},
+    miUTF16: {'codec': 'utf_16', 'width': 2},
+    miUTF32: {'codec': 'utf_32','width': 4},
+    }
+
+def read_dtype(mat_stream, a_dtype):
+    num_bytes = a_dtype.itemsize
+    arr = np.ndarray(shape=(),
+                     dtype=a_dtype,
+                     buffer=mat_stream.read(num_bytes),
+                     order='F')
+    return arr
+
+class MatFile5Reader(MatFileReader):
+    def __init__(self,
+                 mat_stream,
+                 byte_order=None,
+                 mat_dtype=False,
+                 squeeze_me=False,
+                 chars_as_strings=True,
+                 matlab_compatible=False,
+                 struct_as_record=True,
+                 verify_compressed_data_integrity=True,
+                 uint16_codec=None
+                 ):
+        '''Initializer for matlab 5 file format reader
+
+    %(matstream_arg)s
+    %(load_args)s
+    %(struct_arg)s
+    uint16_codec : {None, string}
+        Set codec to use for uint16 char arrays (e.g. 'utf-8').
+        Use system default codec if None
+        '''
+        super(MatFile5Reader, self).__init__(
+            mat_stream,
+            byte_order,
+            mat_dtype,
+            squeeze_me,
+            chars_as_strings,
+            matlab_compatible,
+            struct_as_record,
+            verify_compressed_data_integrity
+            )
+        # Set uint16 codec
+        if not uint16_codec:
+            uint16_codec = sys.getdefaultencoding()
+        self.uint16_codec = uint16_codec
+        # placeholders for readers - see initialize_read method
+        self._file_reader = None
+        self._matrix_reader = None
+
+    def guess_byte_order(self):
+        ''' Guess byte order.
+        Sets stream pointer to 0 '''
+        self.mat_stream.seek(126)
+        mi = self.mat_stream.read(2)
+        self.mat_stream.seek(0)
+        return mi == b'IM' and '<' or '>'
+
+    def read_file_header(self):
+        hdict = {}
+        MDTYPES = {}
+        for _bytecode in '<>':
+            _def = {'dtypes': convert_dtypes(mdtypes_template, _bytecode),
+                    'classes': convert_dtypes(mclass_dtypes_template, _bytecode),
+                    'codecs': _convert_codecs(codecs_template, _bytecode)}
+            MDTYPES[_bytecode] = _def
+        hdr_dtype = MDTYPES[self.byte_order]['dtypes']['file_header']
+        hdr = read_dtype(self.mat_stream, hdr_dtype)
+        hdict['__header__'] = hdr['description'].item().strip(b' \t\n\000')
+        v_major = hdr['version'] >> 8
+        v_minor = hdr['version'] & 0xFF
+        hdict['__version__'] = '%d.%d' % (v_major, v_minor)
+        return hdict
+
+    def initialize_read(self):
+        self._file_reader = VarReader5(self)
+        self._matrix_reader = VarReader5(self)
+
+    def read_var_header(self):
+        mdtype, byte_count = self._file_reader.read_full_tag()
+        if not byte_count > 0:
+            raise ValueError("Did not read any bytes")
+        next_pos = self.mat_stream.tell() + byte_count
+        if mdtype == miCOMPRESSED:
+            #stream = ZlibInputStream(self.mat_stream, byte_count)
+            stream = self.mat_stream
+            self._matrix_reader.set_stream(stream)
+            check_stream_limit = self.verify_compressed_data_integrity
+            mdtype, byte_count = self._matrix_reader.read_full_tag()
+        else:
+            check_stream_limit = False
+            self._matrix_reader.set_stream(self.mat_stream)
+        if not mdtype == miMATRIX:
+            raise TypeError('Expecting miMATRIX type here, got %d' % mdtype)
+        header = self._matrix_reader.read_header(check_stream_limit)
+        return header, next_pos
+
+    def read_var_array(self, header, process=True):
+        ''' Read array, given `header`
+
+        Parameters
+        ----------
+        header : header object
+           object with fields defining variable header
+        process : {True, False} bool, optional
+           If True, apply recursive post-processing during loading of
+           array.
+
+        Returns
+        -------
+        arr : array
+           array with post-processing applied or not according to
+           `process`.
+        '''
+        return self._matrix_reader.array_from_header(header, process)
+
+    def get_variables(self, variable_names=None):
+        if isinstance(variable_names, string_types):
+            variable_names = [variable_names]
+        elif variable_names is not None:
+            variable_names = list(variable_names)
+
+        self.mat_stream.seek(0)
+        self.initialize_read()
+        mdict = self.read_file_header()
+        mdict['__globals__'] = []
+        while not self.end_of_stream():
+            hdr, next_position = self.read_var_header()
+            name = asstr(hdr.name)
+            if name in mdict:
+                warn('Duplicate variable name "%s" in stream'
+                              ' - replacing previous with new\n'
+                              'Consider mio5.varmats_from_mat to split '
+                              'file into single variable files' % name,
+                              MatReadWarning, stacklevel=2)
+            if name == '':
+                name = '__function_workspace__'
+                process = False
+            else:
+                process = True
+            if variable_names is not None and name not in variable_names:
+                self.mat_stream.seek(next_position)
+                continue
+            try:
+                res = self.read_var_array(hdr, process)
+            except MatReadError as err:
+                warn(
+                    'Unreadable variable "%s", because "%s"' %
+                    (name, err),
+                    Warning, stacklevel=2)
+                res = "Read error: %s" % err
+            self.mat_stream.seek(next_position)
+            mdict[name] = res
+            if hdr.is_global:
+                mdict['__globals__'].append(name)
+            if variable_names is not None:
+                variable_names.remove(name)
+                if len(variable_names) == 0:
+                    break
+        return mdict
+
+    def list_variables(self):
+        self.mat_stream.seek(0)
+        self.initialize_read()
+        self.read_file_header()
+        vars = []
+        while not self.end_of_stream():
+            hdr, next_position = self.read_var_header()
+            name = asstr(hdr.name)
+            if name == '':
+                name = '__function_workspace__'
+
+            shape = self._matrix_reader.shape_from_header(hdr)
+            if hdr.is_logical:
+                info = 'logical'
+            else:
+                info = mclass_info.get(hdr.mclass, 'unknown')
+            vars.append((name, shape, info))
+
+            self.mat_stream.seek(next_position)
+        return vars
+
+class MatReadError(Exception):
+    pass
+
+class MatReadWarning(UserWarning):
+    pass

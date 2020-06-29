@@ -28,8 +28,8 @@ from warnings import warn
 from collections.abc import MutableSet
 
 from scipy._lib.six import string_types
+import zlib
 import scipy
-from functools import reduce
 import sys
 
 if sys.version_info[0] >= 3:
@@ -789,6 +789,297 @@ def read_dtype(mat_stream, a_dtype):
                      order='F')
     return arr
 
+OPAQUE_DTYPE = np.dtype(
+    [('s0', 'O'), ('s1', 'O'), ('s2', 'O'), ('arr', 'O')])
+
+MDTYPES = {}
+_N_MIS = 20
+_N_MXS = 20
+_BLOCK_SIZE = 131072
+
+class GenericStream:
+    def __init__(self, fobj):
+        self.fobj = fobj
+
+    def seek(self, offset, whence=0):
+        self.fobj.seek(offset, whence)
+        return 0
+
+    def tell(self):
+        return self.fobj.tell()
+
+    def read(self, n_bytes):
+        return self.fobj.read(n_bytes)
+
+    def all_data_read(self):
+        return 1
+
+    def read_into(self, n):
+        count = 0
+        p = [0 for i in range(n)]
+        while count < n:
+            read_size = min(n - count, _BLOCK_SIZE)
+            data = self.fobj.read(read_size)
+            read_size = len(data)
+            if read_size == 0:
+                break
+            for i in range(read_size):
+                p[i] = data[i]
+            count += read_size
+
+        if count != n:
+            raise IOError('could not read bytes')
+        return p, count
+
+def make_stream(fobj):
+    if isinstance(fobj, GenericStream):
+        return fobj
+    return GenericStream(fobj)
+
+class ZlibInputStream(GenericStream):
+    def __init__(self, fobj, max_length):
+        self.fobj = fobj
+
+        self._max_length = max_length
+        self._decompressor = zlib.decompressobj()
+        self._buffer = b''
+        self._buffer_size = 0
+        self._buffer_position = 0
+        self._total_position = 0
+        self._read_bytes = 0
+
+    def _fill_buffer(self):
+        if self._buffer_position < self._buffer_size:
+            return
+
+        read_size = min(_BLOCK_SIZE, self._max_length - self._read_bytes)
+
+        block = self.fobj.read(read_size)
+        self._read_bytes += len(block)
+
+        self._buffer_position = 0
+        if not block:
+            self._buffer = self._decompressor.flush()
+        else:
+            self._buffer = self._decompressor.decompress(block)
+        self._buffer_size = len(self._buffer)
+
+    def read_into(self, n):
+        dstp = [0 for i in range(n)]
+        count = 0
+        while count < n:
+            self._fill_buffer()
+            if self._buffer_size == 0:
+                break
+
+            srcp = self._buffer
+
+            size = min(n - count, self._buffer_size - self._buffer_position)
+            for i in range (size):
+                dstp[i] = srcp[i]
+            count += size
+            self._buffer_position += size
+
+        return dstp, count
+
+def byteswap_u4(u4):
+    return ((u4 << 24) |
+           ((u4 << 8) & 0xff0000) |
+           ((u4 >> 8 & 0xff00)) |
+           (u4 >> 24))
+
+# class VarHeader5:
+#     # cdef readonly object name
+#     # cdef readonly int mclass
+#     # cdef readonly object dims
+#     # cdef cnp.int32_t dims_ptr[_MAT_MAXDIMS]
+#     # cdef int n_dims
+#     # cdef int check_stream_limit
+#     # cdef int is_complex
+#     # cdef readonly int is_logical
+#     # cdef public int is_global
+#     # cdef readonly size_t nzmax
+#
+#     def set_dims(self, dims):
+#         self.dims = dims
+#         self.n_dims = len(dims)
+#         for i, dim in enumerate(dims):
+#             self.dims_ptr[i] = int(dim)
+
+_MAT_MAXDIMS = 32
+
+# class VarReader5:
+#     def __init__(self, preader):
+#         self.dtypes = [None for i in range(_N_MIS)]
+#         self.class_dtypes = [None for i in range(_N_MXS)]
+#         byte_order = preader.byte_order
+#         self.is_swapped = byte_order == swapped_code
+#         if self.is_swapped:
+#             self.little_endian = not sys_is_le
+#         else:
+#             self.little_endian = sys_is_le
+#         self.struct_as_record = preader.struct_as_record
+#         self.codecs = MDTYPES[byte_order]['codecs'].copy()
+#         self.uint16_codec = preader.uint16_codec
+#         uint16_codec = self.uint16_codec
+#         self.codecs['uint16_len'] = len("  ".encode(uint16_codec)) \
+#                 - len(" ".encode(uint16_codec))
+#         self.codecs['uint16_codec'] = uint16_codec
+#         self.cstream = make_stream(preader.mat_stream)
+#         self.mat_dtype = preader.mat_dtype
+#         self.chars_as_strings = preader.chars_as_strings
+#         self.squeeze_me = preader.squeeze_me
+#         for key, dt in MDTYPES[byte_order]['dtypes'].items():
+#             if isinstance(key, str):
+#                 continue
+#             self.dtypes[key] = dt
+#         for key, dt in MDTYPES[byte_order]['classes'].items():
+#             if isinstance(key, str):
+#                 continue
+#             self.class_dtypes[key] = dt
+#
+#     def read_full_tag(self):
+#         u4s, count = self.cstream.read_into(8)
+#         if self.is_swapped:
+#             mdtype = byteswap_u4(u4s[0])
+#             byte_count = byteswap_u4(count)
+#         else:
+#             mdtype = u4s[0]
+#             byte_count = count
+#         return mdtype, byte_count
+#
+#     def set_stream(self, fobj):
+#         self.cstream = make_stream(fobj)
+#
+#     def cread_tag(self, mdtype_ptr, byte_count_ptr,data_ptr):
+#         u4_ptr = data_ptr
+#         u4s, count = self.cstream.read_into(8)
+#         if self.is_swapped:
+#             mdtype = byteswap_u4(u4s[0])
+#         else:
+#             mdtype = u4s[0]
+#         # The most significant two bytes of a U4 *mdtype* will always be
+#         # 0, if they are not, this must be SDE format
+#         byte_count_sde = mdtype >> 16
+#         if byte_count_sde: # small data element format
+#             mdtype_sde = mdtype & 0xffff
+#             if byte_count_sde > 4:
+#                 raise ValueError('Error in SDE format data')
+#             u4_ptr[0] = u4s[1]
+#             mdtype_ptr[0] = mdtype_sde
+#             byte_count_ptr[0] = byte_count_sde
+#             return 2
+#         if self.is_swapped:
+#             byte_count_ptr[0] = byteswap_u4(u4s[1])
+#         else:
+#             byte_count_ptr[0] = u4s[1]
+#         mdtype_ptr[0] = mdtype
+#         u4_ptr[0] = 0
+#         return 1
+#
+#     def read_element(self,
+#                              mdtype_ptr, byte_count_ptr, pp, copy=True):
+#         # cdef cnp.uint32_t mdtype, byte_count
+#         # cdef char tag_data[4]
+#         # cdef object data
+#         # cdef int mod8
+#         tag_res = self.cread_tag(mdtype_ptr,
+#                                           byte_count_ptr,
+#                                           tag_data)
+#         mdtype = mdtype_ptr[0]
+#         byte_count = byte_count_ptr[0]
+#         if tag_res == 1: # full format
+#             data = self.cstream.read_string(
+#                 byte_count,
+#                 pp,
+#                 copy)
+#             # Seek to next 64-bit boundary
+#             mod8 = byte_count % 8
+#             if mod8:
+#                 self.cstream.seek(8 - mod8, 1)
+#         else: # SDE format, make safer home for data
+#             data = tag_data[:byte_count]
+#             pp[0] = data
+#         return data
+#
+#     def read_element_into(self, ptr, max_byte_count):
+#         if max_byte_count < 4:
+#             raise ValueError('Unexpected amount of data to read (malformed input file?)')
+#         mdtype_ptr= [0]
+#         byte_count_ptr = [0]
+#         res = self.cread_tag(mdtype_ptr, byte_count_ptr, ptr)
+#         byte_count = byte_count_ptr[0]
+#         if res == 1: # full format
+#             if byte_count > max_byte_count:
+#                 raise ValueError('Unexpected amount of data to read (malformed input file?)')
+#             res = self.cstream.read_into(ptr, byte_count)
+#             mod8 = byte_count % 8
+#             if mod8:
+#                 self.cstream.seek(8 - mod8, 1)
+#         return 0
+#
+#     def read_int8_string(self):
+#         # cdef:
+#         #     cnp.uint32_t mdtype, byte_count, i
+#         #     void* ptr
+#         #     unsigned char* byte_ptr
+#         #     object data
+#         data = self.read_element(mdtype, byte_count, ptr)
+#         if mdtype == miUTF8:
+#             byte_ptr = ptr
+#             for i in range(byte_count):
+#                 if byte_ptr[i] > 127:
+#                     raise ValueError('Non ascii int8 string')
+#         elif mdtype != miINT8:
+#             raise TypeError('Expecting miINT8 as data type')
+#         return data
+#
+#     def read_into_int32s(self, int32p, max_byte_count):
+#         mdtype, byte_count = self.read_element_into(int32p, max_byte_count)
+#         if mdtype == miUINT32:
+#             check_ints = 1
+#         elif mdtype != miINT32:
+#             raise TypeError('Expecting miINT32 as data type')
+#         n_ints = byte_count // 4
+#         if self.is_swapped:
+#             for i in range(n_ints):
+#                 int32p[i] = byteswap_u4(int32p[i])
+#         if check_ints:
+#             for i in range(n_ints):
+#                 if int32p[i] < 0:
+#                     raise ValueError('Expecting miINT32, got miUINT32 with '
+#                                      'negative values')
+#         return n_ints
+#
+#     def read_header(self, check_stream_limit):
+#         u4s, count = self.cstream.read_into(8)
+#         if self.is_swapped:
+#             flags_class = byteswap_u4(u4s[0])
+#             nzmax = byteswap_u4(count)
+#         else:
+#             flags_class = u4s[0]
+#             nzmax = count
+#         header = VarHeader5()
+#         mc = flags_class & 0xFF
+#         header.mclass = mc
+#         header.check_stream_limit = check_stream_limit
+#         header.is_logical = flags_class >> 9 & 1
+#         header.is_global = flags_class >> 10 & 1
+#         header.is_complex = flags_class >> 11 & 1
+#         header.nzmax = nzmax
+#         header.dims_ptr = [0 for i in range(_MAT_MAXDIMS)]
+#         if mc == mxOPAQUE_CLASS:
+#             header.name = None
+#             header.dims = None
+#             return header
+#         header.n_dims = self.read_into_int32s(header.dims_ptr, len(header.dims_ptr))
+#         if header.n_dims > _MAT_MAXDIMS:
+#             raise ValueError('Too many dimensions (%d) for numpy arrays'
+#                              % header.n_dims)
+#         header.dims = [header.dims_ptr[i] for i in range(header.n_dims)]
+#         header.name = self.read_int8_string()
+#         return header
+
 class MatFile5Reader(MatFileReader):
     def __init__(self,
                  mat_stream,
@@ -801,15 +1092,6 @@ class MatFile5Reader(MatFileReader):
                  verify_compressed_data_integrity=True,
                  uint16_codec=None
                  ):
-        '''Initializer for matlab 5 file format reader
-
-    %(matstream_arg)s
-    %(load_args)s
-    %(struct_arg)s
-    uint16_codec : {None, string}
-        Set codec to use for uint16 char arrays (e.g. 'utf-8').
-        Use system default codec if None
-        '''
         super(MatFile5Reader, self).__init__(
             mat_stream,
             byte_order,
@@ -820,17 +1102,13 @@ class MatFile5Reader(MatFileReader):
             struct_as_record,
             verify_compressed_data_integrity
             )
-        # Set uint16 codec
         if not uint16_codec:
             uint16_codec = sys.getdefaultencoding()
         self.uint16_codec = uint16_codec
-        # placeholders for readers - see initialize_read method
         self._file_reader = None
         self._matrix_reader = None
 
     def guess_byte_order(self):
-        ''' Guess byte order.
-        Sets stream pointer to 0 '''
         self.mat_stream.seek(126)
         mi = self.mat_stream.read(2)
         self.mat_stream.seek(0)
@@ -838,12 +1116,6 @@ class MatFile5Reader(MatFileReader):
 
     def read_file_header(self):
         hdict = {}
-        MDTYPES = {}
-        for _bytecode in '<>':
-            _def = {'dtypes': convert_dtypes(mdtypes_template, _bytecode),
-                    'classes': convert_dtypes(mclass_dtypes_template, _bytecode),
-                    'codecs': _convert_codecs(codecs_template, _bytecode)}
-            MDTYPES[_bytecode] = _def
         hdr_dtype = MDTYPES[self.byte_order]['dtypes']['file_header']
         hdr = read_dtype(self.mat_stream, hdr_dtype)
         hdict['__header__'] = hdr['description'].item().strip(b' \t\n\000')
@@ -862,8 +1134,7 @@ class MatFile5Reader(MatFileReader):
             raise ValueError("Did not read any bytes")
         next_pos = self.mat_stream.tell() + byte_count
         if mdtype == miCOMPRESSED:
-            #stream = ZlibInputStream(self.mat_stream, byte_count)
-            stream = self.mat_stream
+            stream = ZlibInputStream(self.mat_stream, byte_count)
             self._matrix_reader.set_stream(stream)
             check_stream_limit = self.verify_compressed_data_integrity
             mdtype, byte_count = self._matrix_reader.read_full_tag()
@@ -876,22 +1147,6 @@ class MatFile5Reader(MatFileReader):
         return header, next_pos
 
     def read_var_array(self, header, process=True):
-        ''' Read array, given `header`
-
-        Parameters
-        ----------
-        header : header object
-           object with fields defining variable header
-        process : {True, False} bool, optional
-           If True, apply recursive post-processing during loading of
-           array.
-
-        Returns
-        -------
-        arr : array
-           array with post-processing applied or not according to
-           `process`.
-        '''
         return self._matrix_reader.array_from_header(header, process)
 
     def get_variables(self, variable_names=None):
@@ -899,6 +1154,12 @@ class MatFile5Reader(MatFileReader):
             variable_names = [variable_names]
         elif variable_names is not None:
             variable_names = list(variable_names)
+
+        for _bytecode in '<>':
+            _def = {'dtypes': convert_dtypes(mdtypes_template, _bytecode),
+                    'classes': convert_dtypes(mclass_dtypes_template, _bytecode),
+                    'codecs': _convert_codecs(codecs_template, _bytecode)}
+            MDTYPES[_bytecode] = _def
 
         self.mat_stream.seek(0)
         self.initialize_read()

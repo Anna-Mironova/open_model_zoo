@@ -32,7 +32,7 @@ class AFLW20003DConverter(DirectoryBasedAnnotationConverter):
                     content_errors.append('{}: does not exists'.format(str(annotation_file)))
                 continue
 
-            image_info = scipy_io.loadmat(str(annotation_file))
+            #image_info = scipy_io.loadmat(str(annotation_file))
             image_info = loadmat(str(annotation_file))
             x_values, y_values, z_values = image_info['pt3d_68']
             x_min, y_min = np.min(x_values), np.min(y_values)

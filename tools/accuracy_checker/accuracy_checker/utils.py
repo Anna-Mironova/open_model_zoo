@@ -29,7 +29,6 @@ from collections.abc import MutableSet
 
 from scipy._lib.six import string_types
 import zlib
-import scipy
 import sys
 
 if sys.version_info[0] >= 3:
@@ -797,289 +796,6 @@ _N_MIS = 20
 _N_MXS = 20
 _BLOCK_SIZE = 131072
 
-class GenericStream:
-    def __init__(self, fobj):
-        self.fobj = fobj
-
-    def seek(self, offset, whence=0):
-        self.fobj.seek(offset, whence)
-        return 0
-
-    def tell(self):
-        return self.fobj.tell()
-
-    def read(self, n_bytes):
-        return self.fobj.read(n_bytes)
-
-    def all_data_read(self):
-        return 1
-
-    def read_into(self, n):
-        count = 0
-        p = [0 for i in range(n)]
-        while count < n:
-            read_size = min(n - count, _BLOCK_SIZE)
-            data = self.fobj.read(read_size)
-            read_size = len(data)
-            if read_size == 0:
-                break
-            for i in range(read_size):
-                p[i] = data[i]
-            count += read_size
-
-        if count != n:
-            raise IOError('could not read bytes')
-        return p, count
-
-def make_stream(fobj):
-    if isinstance(fobj, GenericStream):
-        return fobj
-    return GenericStream(fobj)
-
-class ZlibInputStream(GenericStream):
-    def __init__(self, fobj, max_length):
-        self.fobj = fobj
-
-        self._max_length = max_length
-        self._decompressor = zlib.decompressobj()
-        self._buffer = b''
-        self._buffer_size = 0
-        self._buffer_position = 0
-        self._total_position = 0
-        self._read_bytes = 0
-
-    def _fill_buffer(self):
-        if self._buffer_position < self._buffer_size:
-            return
-
-        read_size = min(_BLOCK_SIZE, self._max_length - self._read_bytes)
-
-        block = self.fobj.read(read_size)
-        self._read_bytes += len(block)
-
-        self._buffer_position = 0
-        if not block:
-            self._buffer = self._decompressor.flush()
-        else:
-            self._buffer = self._decompressor.decompress(block)
-        self._buffer_size = len(self._buffer)
-
-    def read_into(self, n):
-        dstp = [0 for i in range(n)]
-        count = 0
-        while count < n:
-            self._fill_buffer()
-            if self._buffer_size == 0:
-                break
-
-            srcp = self._buffer
-
-            size = min(n - count, self._buffer_size - self._buffer_position)
-            for i in range (size):
-                dstp[i] = srcp[i]
-            count += size
-            self._buffer_position += size
-
-        return dstp, count
-
-def byteswap_u4(u4):
-    return ((u4 << 24) |
-           ((u4 << 8) & 0xff0000) |
-           ((u4 >> 8 & 0xff00)) |
-           (u4 >> 24))
-
-# class VarHeader5:
-#     # cdef readonly object name
-#     # cdef readonly int mclass
-#     # cdef readonly object dims
-#     # cdef cnp.int32_t dims_ptr[_MAT_MAXDIMS]
-#     # cdef int n_dims
-#     # cdef int check_stream_limit
-#     # cdef int is_complex
-#     # cdef readonly int is_logical
-#     # cdef public int is_global
-#     # cdef readonly size_t nzmax
-#
-#     def set_dims(self, dims):
-#         self.dims = dims
-#         self.n_dims = len(dims)
-#         for i, dim in enumerate(dims):
-#             self.dims_ptr[i] = int(dim)
-
-_MAT_MAXDIMS = 32
-
-# class VarReader5:
-#     def __init__(self, preader):
-#         self.dtypes = [None for i in range(_N_MIS)]
-#         self.class_dtypes = [None for i in range(_N_MXS)]
-#         byte_order = preader.byte_order
-#         self.is_swapped = byte_order == swapped_code
-#         if self.is_swapped:
-#             self.little_endian = not sys_is_le
-#         else:
-#             self.little_endian = sys_is_le
-#         self.struct_as_record = preader.struct_as_record
-#         self.codecs = MDTYPES[byte_order]['codecs'].copy()
-#         self.uint16_codec = preader.uint16_codec
-#         uint16_codec = self.uint16_codec
-#         self.codecs['uint16_len'] = len("  ".encode(uint16_codec)) \
-#                 - len(" ".encode(uint16_codec))
-#         self.codecs['uint16_codec'] = uint16_codec
-#         self.cstream = make_stream(preader.mat_stream)
-#         self.mat_dtype = preader.mat_dtype
-#         self.chars_as_strings = preader.chars_as_strings
-#         self.squeeze_me = preader.squeeze_me
-#         for key, dt in MDTYPES[byte_order]['dtypes'].items():
-#             if isinstance(key, str):
-#                 continue
-#             self.dtypes[key] = dt
-#         for key, dt in MDTYPES[byte_order]['classes'].items():
-#             if isinstance(key, str):
-#                 continue
-#             self.class_dtypes[key] = dt
-#
-#     def read_full_tag(self):
-#         u4s, count = self.cstream.read_into(8)
-#         if self.is_swapped:
-#             mdtype = byteswap_u4(u4s[0])
-#             byte_count = byteswap_u4(count)
-#         else:
-#             mdtype = u4s[0]
-#             byte_count = count
-#         return mdtype, byte_count
-#
-#     def set_stream(self, fobj):
-#         self.cstream = make_stream(fobj)
-#
-#     def cread_tag(self, mdtype_ptr, byte_count_ptr,data_ptr):
-#         u4_ptr = data_ptr
-#         u4s, count = self.cstream.read_into(8)
-#         if self.is_swapped:
-#             mdtype = byteswap_u4(u4s[0])
-#         else:
-#             mdtype = u4s[0]
-#         # The most significant two bytes of a U4 *mdtype* will always be
-#         # 0, if they are not, this must be SDE format
-#         byte_count_sde = mdtype >> 16
-#         if byte_count_sde: # small data element format
-#             mdtype_sde = mdtype & 0xffff
-#             if byte_count_sde > 4:
-#                 raise ValueError('Error in SDE format data')
-#             u4_ptr[0] = u4s[1]
-#             mdtype_ptr[0] = mdtype_sde
-#             byte_count_ptr[0] = byte_count_sde
-#             return 2
-#         if self.is_swapped:
-#             byte_count_ptr[0] = byteswap_u4(u4s[1])
-#         else:
-#             byte_count_ptr[0] = u4s[1]
-#         mdtype_ptr[0] = mdtype
-#         u4_ptr[0] = 0
-#         return 1
-#
-#     def read_element(self,
-#                              mdtype_ptr, byte_count_ptr, pp, copy=True):
-#         # cdef cnp.uint32_t mdtype, byte_count
-#         # cdef char tag_data[4]
-#         # cdef object data
-#         # cdef int mod8
-#         tag_res = self.cread_tag(mdtype_ptr,
-#                                           byte_count_ptr,
-#                                           tag_data)
-#         mdtype = mdtype_ptr[0]
-#         byte_count = byte_count_ptr[0]
-#         if tag_res == 1: # full format
-#             data = self.cstream.read_string(
-#                 byte_count,
-#                 pp,
-#                 copy)
-#             # Seek to next 64-bit boundary
-#             mod8 = byte_count % 8
-#             if mod8:
-#                 self.cstream.seek(8 - mod8, 1)
-#         else: # SDE format, make safer home for data
-#             data = tag_data[:byte_count]
-#             pp[0] = data
-#         return data
-#
-#     def read_element_into(self, ptr, max_byte_count):
-#         if max_byte_count < 4:
-#             raise ValueError('Unexpected amount of data to read (malformed input file?)')
-#         mdtype_ptr= [0]
-#         byte_count_ptr = [0]
-#         res = self.cread_tag(mdtype_ptr, byte_count_ptr, ptr)
-#         byte_count = byte_count_ptr[0]
-#         if res == 1: # full format
-#             if byte_count > max_byte_count:
-#                 raise ValueError('Unexpected amount of data to read (malformed input file?)')
-#             res = self.cstream.read_into(ptr, byte_count)
-#             mod8 = byte_count % 8
-#             if mod8:
-#                 self.cstream.seek(8 - mod8, 1)
-#         return 0
-#
-#     def read_int8_string(self):
-#         # cdef:
-#         #     cnp.uint32_t mdtype, byte_count, i
-#         #     void* ptr
-#         #     unsigned char* byte_ptr
-#         #     object data
-#         data = self.read_element(mdtype, byte_count, ptr)
-#         if mdtype == miUTF8:
-#             byte_ptr = ptr
-#             for i in range(byte_count):
-#                 if byte_ptr[i] > 127:
-#                     raise ValueError('Non ascii int8 string')
-#         elif mdtype != miINT8:
-#             raise TypeError('Expecting miINT8 as data type')
-#         return data
-#
-#     def read_into_int32s(self, int32p, max_byte_count):
-#         mdtype, byte_count = self.read_element_into(int32p, max_byte_count)
-#         if mdtype == miUINT32:
-#             check_ints = 1
-#         elif mdtype != miINT32:
-#             raise TypeError('Expecting miINT32 as data type')
-#         n_ints = byte_count // 4
-#         if self.is_swapped:
-#             for i in range(n_ints):
-#                 int32p[i] = byteswap_u4(int32p[i])
-#         if check_ints:
-#             for i in range(n_ints):
-#                 if int32p[i] < 0:
-#                     raise ValueError('Expecting miINT32, got miUINT32 with '
-#                                      'negative values')
-#         return n_ints
-#
-#     def read_header(self, check_stream_limit):
-#         u4s, count = self.cstream.read_into(8)
-#         if self.is_swapped:
-#             flags_class = byteswap_u4(u4s[0])
-#             nzmax = byteswap_u4(count)
-#         else:
-#             flags_class = u4s[0]
-#             nzmax = count
-#         header = VarHeader5()
-#         mc = flags_class & 0xFF
-#         header.mclass = mc
-#         header.check_stream_limit = check_stream_limit
-#         header.is_logical = flags_class >> 9 & 1
-#         header.is_global = flags_class >> 10 & 1
-#         header.is_complex = flags_class >> 11 & 1
-#         header.nzmax = nzmax
-#         header.dims_ptr = [0 for i in range(_MAT_MAXDIMS)]
-#         if mc == mxOPAQUE_CLASS:
-#             header.name = None
-#             header.dims = None
-#             return header
-#         header.n_dims = self.read_into_int32s(header.dims_ptr, len(header.dims_ptr))
-#         if header.n_dims > _MAT_MAXDIMS:
-#             raise ValueError('Too many dimensions (%d) for numpy arrays'
-#                              % header.n_dims)
-#         header.dims = [header.dims_ptr[i] for i in range(header.n_dims)]
-#         header.name = self.read_int8_string()
-#         return header
-
 class MatFile5Reader(MatFileReader):
     def __init__(self,
                  mat_stream,
@@ -1226,3 +942,426 @@ class MatReadError(Exception):
 
 class MatReadWarning(UserWarning):
     pass
+
+class GenericStream:
+    def __init__(self, fobj):
+        self.fobj = fobj
+
+    def seek(self, offset, whence=0):
+        self.fobj.seek(offset, whence)
+
+    def tell(self):
+        return self.fobj.tell()
+
+    def read(self, n_bytes):
+        return self.fobj.read(n_bytes)
+
+    def all_data_read(self):
+        return 1
+
+    def read_into(self, buf, n):
+        count = 0
+        while count < n:
+            read_size = min(n - count, _BLOCK_SIZE)
+            data = self.fobj.read(read_size)
+            read_size = len(data)
+            if read_size == 0:
+                break
+            for i in range (read_size):
+                buf.append(data[i])
+            count += read_size
+
+        buf = [x for x in buf if x!=0]
+        return buf, buf[1]
+
+    def read_string(self,  n, pp, copy=True):
+        if copy != True:
+            data = self.fobj.read(n)
+            if len(data) != n:
+                raise IOError('could not read bytes')
+            pp[0] = str(data)
+            return data
+
+        d_copy = self.read_into(pp[0], n)
+        return d_copy
+
+class ZlibInputStream(GenericStream):
+    def __init__(self, fobj, max_length):
+        self.fobj = fobj
+        self._max_length = max_length
+        self._decompressor = zlib.decompressobj()
+        self._buffer = b''
+        self._buffer_size = 0
+        self._buffer_position = 0
+        self._total_position = 0
+        self._read_bytes = 0
+
+    def _fill_buffer(self):
+        if self._buffer_position < self._buffer_size:
+            return
+
+        read_size = min(_BLOCK_SIZE, self._max_length - self._read_bytes)
+
+        block = self.fobj.read(read_size)
+        self._read_bytes += len(block)
+
+        self._buffer_position = 0
+        if not block:
+            self._buffer = self._decompressor.flush()
+        else:
+            self._buffer = self._decompressor.decompress(block)
+        self._buffer_size = len(self._buffer)
+
+    def read_into(self, buf, n) :
+        count = 0
+        buf = []
+        while count < n:
+            self._fill_buffer()
+            if self._buffer_size == 0:
+                break
+
+            srcp = self._buffer
+            srcp = srcp[self._buffer_position:]
+
+            size = min(n - count, self._buffer_size - self._buffer_position)
+            for i in range(size):
+                buf.append(srcp[i])
+            count += size
+            self._buffer_position += size
+
+        self._total_position += count
+
+        count = self._buffer_size - self._buffer_position
+
+        return buf, count
+
+    def read_string(self, n, pp, copy=True):
+        d_copy, count = self.read_into(pp[0], n)
+        return d_copy
+
+    def read(self, n_bytes):
+        p=None
+        return self.read_string(n_bytes, p)
+
+    def all_data_read(self) :
+        if self._read_bytes < self._max_length:
+            self._fill_buffer()
+        return (self._max_length == self._read_bytes) and \
+               (self._buffer_size == self._buffer_position)
+
+    def tell(self):
+        if self._total_position == -1:
+            raise IOError("Invalid file position.")
+        return self._total_position
+
+    def seek(self, offset, whence=0) :
+        if whence == 1:
+            new_pos = self._total_position + offset
+        elif whence == 0:
+            new_pos = offset
+        elif whence == 2:
+            raise IOError("Zlib stream cannot seek from file end")
+        else:
+            raise ValueError("Invalid value for whence")
+
+        if new_pos < self._total_position:
+            raise IOError("Zlib stream cannot seek backwards")
+
+        while self._total_position < new_pos:
+            self._fill_buffer()
+            if self._buffer_size == 0:
+                break
+
+            size = min(new_pos - self._total_position,
+                       self._buffer_size - self._buffer_position)
+
+            self._total_position += size
+            self._buffer_position += size
+
+        return 0
+
+def make_stream(fobj):
+    if isinstance(fobj, GenericStream):
+        return fobj
+    return GenericStream(fobj)
+
+def byteswap_u4(u4):
+    return ((u4 << 24) |
+        ((u4 << 8) & 0xff0000) |
+        ((u4 >> 8 & 0xff00)) |
+        (u4 >> 24))
+
+class VarHeader5:
+    def set_dims(self, dims):
+        self.dims = dims
+        self.n_dims = len(dims)
+        for i, dim in enumerate(dims):
+            self.dims_ptr[i] = int(dim)
+
+_MAT_MAXDIMS = 32
+
+class VarReader5:
+    def __init__(self, preader):
+        self.dtypes = [0 for i in range(_N_MIS)]
+        self.class_dtypes = [0 for i in range(_N_MXS)]
+        byte_order = preader.byte_order
+        self.is_swapped = byte_order == swapped_code
+        if self.is_swapped:
+            self.little_endian = not sys_is_le
+        else:
+            self.little_endian = sys_is_le
+        self.struct_as_record = preader.struct_as_record
+        self.codecs = MDTYPES[byte_order]['codecs'].copy()
+        self.uint16_codec = preader.uint16_codec
+        uint16_codec = self.uint16_codec
+        self.codecs['uint16_len'] = len("  ".encode(uint16_codec)) \
+                                    - len(" ".encode(uint16_codec))
+        self.codecs['uint16_codec'] = uint16_codec
+        self.cstream = make_stream(preader.mat_stream)
+        self.mat_dtype = preader.mat_dtype
+        self.chars_as_strings = preader.chars_as_strings
+        self.squeeze_me = preader.squeeze_me
+        for key, dt in MDTYPES[byte_order]['dtypes'].items():
+            if isinstance(key, str):
+                continue
+            self.dtypes[key] = dt
+        for key, dt in MDTYPES[byte_order]['classes'].items():
+            if isinstance(key, str):
+                continue
+            self.class_dtypes[key] =  dt
+
+    def set_stream(self, fobj):
+        self.cstream = make_stream(fobj)
+
+    def read_tag(self):
+        mdtype = None
+        byte_count = None
+        tag_ptr = None
+        tag_data = None
+        tag_res = self.cread_tag(mdtype, byte_count, tag_ptr)
+        if tag_res == 2:
+            tag_data = tag_ptr[:byte_count]
+        return (mdtype, byte_count, tag_data)
+
+
+    def cread_tag(self, mdtype_ptr, byte_count_ptr, data_ptr):
+        u4s = []
+        u4s, count = self.cstream.read_into(u4s, 8)
+        u4s = [x for x in u4s if x!=0]
+        if self.is_swapped:
+            mdtype = byteswap_u4(u4s[0])
+        else:
+            mdtype = u4s[0]
+        byte_count_sde = mdtype >> 16
+        if byte_count_sde:
+            mdtype_sde = mdtype & 0xffff
+            if byte_count_sde > 4:
+                raise ValueError('Error in SDE format data')
+            data_ptr[0] = u4s[1]
+            mdtype_ptr = mdtype_sde
+            byte_count_ptr = byte_count_sde
+            return 2, mdtype_ptr, byte_count_ptr, data_ptr
+        if self.is_swapped:
+            byte_count_ptr = byteswap_u4(u4s[1])
+        else:
+            byte_count_ptr = u4s[1]
+        mdtype_ptr = mdtype
+        data_ptr[0] = 0
+        return 1,  mdtype_ptr, byte_count_ptr
+
+    def read_element(self, mdtype_ptr, byte_count_ptr, pp, copy = True):
+        tag_data = [0 for i in range(4)]
+        tag_res, mdtype_ptr, byte_count_ptr = self.cread_tag(mdtype_ptr, byte_count_ptr, tag_data)
+        mdtype = mdtype_ptr
+        byte_count = byte_count_ptr
+        if tag_res == 1:
+            data = self.cstream.read_string(byte_count, pp, copy)
+            mod8 = byte_count % 8
+            if mod8:
+                self.cstream.seek(8 - mod8, 1)
+        else:
+            data = tag_data[:byte_count]
+            pp[0] = data
+        return data, mdtype_ptr, byte_count_ptr, pp
+
+    def read_element_into(self, mdtype_ptr, byte_count_ptr, ptr, max_byte_count):
+        if max_byte_count < 4:
+            raise ValueError('Unexpected amount of data to read (malformed input file?)')
+        res, mdtype_ptr, byte_count_ptr = self.cread_tag(mdtype_ptr, byte_count_ptr, ptr)
+        byte_count = byte_count_ptr
+        if res == 1:
+            if byte_count > max_byte_count:
+                raise ValueError('Unexpected amount of data to read (malformed input file?)')
+            ptr, _ = self.cstream.read_into(ptr, byte_count)
+            mod8 = byte_count % 8
+            if mod8:
+                self.cstream.seek(8 - mod8, 1)
+        return mdtype_ptr, byte_count_ptr, ptr
+
+    def read_int8_string(self):
+        mdtype = None
+        byte_count = None
+        ptr = [[]]
+        data, mdtype, byte_count, ptr = self.read_element(mdtype, byte_count, ptr)
+        if mdtype == miUTF8:
+            byte_ptr = ptr
+            for i in range(byte_count):
+                if byte_ptr[i] > 127:
+                    raise ValueError('Non ascii int8 string')
+        elif mdtype != miINT8:
+            raise TypeError('Expecting miINT8 as data type')
+        return data
+
+    def read_into_int32s(self, int32p, max_byte_count):
+        check_ints = 0
+        mdtype = None
+        byte_count = None
+        mdtype, byte_count, int32p = self.read_element_into(mdtype, byte_count, int32p, max_byte_count)
+        if mdtype == miUINT32:
+            check_ints = 1
+        elif mdtype != miINT32:
+            raise TypeError('Expecting miINT32 as data type')
+        n_ints = byte_count // 4
+        if self.is_swapped:
+            for i in range(n_ints):
+                int32p[i] = byteswap_u4(int32p[i])
+        if check_ints:
+            for i in range(n_ints):
+                if int32p[i] < 0:
+                    raise ValueError('Expecting miINT32, got miUINT32 with '
+                                     'negative values')
+        return n_ints
+
+
+    def read_full_tag(self):
+        mdtype = None
+        byte_count = None
+        mdtype,byte_count = self.cread_full_tag(mdtype,byte_count)
+        return mdtype, byte_count
+
+
+    def cread_full_tag(self, mdtype, byte_count):
+        u4s =[]
+        u4s, count = self.cstream.read_into(u4s, 8)
+        if self.is_swapped:
+            mdtype = byteswap_u4(u4s[0])
+            byte_count = byteswap_u4(count)
+        else:
+            mdtype = u4s[0]
+            byte_count = count
+        return mdtype, byte_count
+
+    def read_header(self, check_stream_limit):
+        u4s = []
+        u4s, _ = self.cstream.read_into(u4s, 8)
+        u4s = []
+        u4s, _ = self.cstream.read_into(u4s, 8)
+        if self.is_swapped:
+            flags_class = byteswap_u4(u4s[0])
+            nzmax = byteswap_u4(u4s[1])
+        else:
+            flags_class = u4s[0]
+            nzmax = u4s[1]
+        header = VarHeader5()
+        mc = flags_class & 0xFF
+        header.mclass = mc
+        header.check_stream_limit = check_stream_limit
+        header.is_logical = flags_class >> 9 & 1
+        header.is_global = flags_class >> 10 & 1
+        header.is_complex = flags_class >> 11 & 1
+        header.nzmax = nzmax
+        header.dims_ptr = [0 for i in range (_MAT_MAXDIMS)]
+        if mc == mxOPAQUE_CLASS:
+            header.name = None
+            header.dims = None
+            return header
+        header.n_dims = self.read_into_int32s(header.dims_ptr, len(header.dims_ptr))
+        if header.n_dims > _MAT_MAXDIMS:
+            raise ValueError('Too many dimensions (%d) for numpy arrays'
+                             % header.n_dims)
+        header.dims = [header.dims_ptr[i] for i in range(header.n_dims)]
+        header.name = self.read_int8_string()
+        return header
+
+    def size_from_header(self, header):
+        size = 1
+        for i in range(header.n_dims):
+            size *= header.dims_ptr[i]
+        return size
+
+    def read_real_complex(self, header):
+        if header.is_complex:
+            res = self.read_numeric(False)
+            res_j = self.read_numeric(False)
+            if res.itemsize == 4:
+                res = res.astype('c8')
+            else:
+                res = res.astype('c16')
+            res.imag = res_j
+        else:
+            res = self.read_numeric()
+        return res.reshape(header.dims[::-1]).T
+
+    def read_numeric(self, copy=True, nnz=-1):
+        mdtype = None
+        byte_count = None
+        data_ptr =[[]]
+        data, mdtype, byte_count, data_ptr = self.read_element(mdtype, byte_count, data_ptr, copy)
+        dt = self.dtypes[mdtype]
+        if dt.itemsize != 1 and nnz != -1 and byte_count == nnz:
+            el_count =  nnz
+            dt = BOOL_DTYPE
+        else:
+            el_count = byte_count // dt.itemsize
+        flags = 0
+        if copy:
+            flags = np.NPY_WRITEABLE
+        # el = PyArray_NewFromDescr(&PyArray_Type,
+        #                            dt,
+        #                            1,
+        #                            &el_count,
+        #                            NULL,
+        #                            <void*>data_ptr,
+        #                            flags,
+        #                            <object>NULL)
+        # Py_INCREF(<object> data)
+        # PyArray_Set_BASE(el, data)
+        return data
+
+    def array_from_header(self, header, process = 1):
+        mc = header.mclass
+        if (mc == mxDOUBLE_CLASS
+            or mc == mxSINGLE_CLASS
+            or mc == mxINT8_CLASS
+            or mc == mxUINT8_CLASS
+            or mc == mxINT16_CLASS
+            or mc == mxUINT16_CLASS
+            or mc == mxINT32_CLASS
+            or mc == mxUINT32_CLASS
+            or mc == mxINT64_CLASS
+            or mc == mxUINT64_CLASS):
+            arr = self.read_real_complex(header)
+            if process and self.mat_dtype:
+                if header.is_logical:
+                    mat_dtype = BOOL_DTYPE
+                else:
+                    mat_dtype = self.class_dtypes[mc]
+                arr = arr.astype(mat_dtype)
+        read_ok = self.cstream.all_data_read()
+        if header.check_stream_limit and not read_ok:
+            raise ValueError('Did not fully consume compressed contents' +
+                             ' of an miCOMPRESSED element. This can' +
+                             ' indicate that the .mat file is corrupted.')
+        if process and self.squeeze_me:
+            return squeeze_element(arr)
+        return arr
+
+def squeeze_element(arr):
+    if not arr.size:
+        return np.array([])
+    arr2 = np.squeeze(arr)
+    if arr2.ndim == 0 and arr2.dtype.kind != 'V':
+        return arr2.item()
+    return arr2
+
+BOOL_DTYPE = np.dtype(np.bool_)

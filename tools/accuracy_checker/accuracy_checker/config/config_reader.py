@@ -314,9 +314,9 @@ class ConfigReader:
                 if 'network_info' in module_config:
                     networks_info = module_config['network_info']
                     if isinstance(networks_info, dict):
-                        for _, params in networks_info.items():
+                        for value_id, (_, params) in enumerate(networks_info.items()):
                             entries_paths['launchers'].update(LIST_ENTRIES_PATHS)
-                            merge_entry_paths(entries_paths['launchers'], params, args)
+                            merge_entry_paths(entries_paths['launchers'], params, args, value_id=value_id)
                     if isinstance(networks_info, list):
                         merge_entry_paths(entries_paths['launchers'], networks_info, args)
 

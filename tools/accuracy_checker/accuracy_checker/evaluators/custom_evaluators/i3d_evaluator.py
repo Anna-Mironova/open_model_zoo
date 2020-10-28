@@ -28,7 +28,32 @@ from ...data_readers import create_reader
 from ...utils import extract_image_representations, contains_all, get_path
 from ...progress_reporters import ProgressReporter
 from ...logging import print_info
-from ...preprocessor import Crop, Resize
+from ...preprocessor import Crop, Resize, Normalize
+from ...launcher import TFLauncher
+
+
+def create_rgb_model(model_config, launcher, data_source, delayed_model_loading=False):
+    launcher_model_mapping = {
+        'dlsdk': I3DRGBDLSDKModel,
+        'tf': I3DRGBTFModel
+    }
+    framework = launcher.config['framework']
+    model_class = launcher_model_mapping.get(framework)
+    if not model_class:
+        raise ValueError('model for framework {} is not supported'.format(framework))
+    return model_class(model_config, launcher, data_source, delayed_model_loading)
+
+
+def create_flow_model(model_config, launcher, data_source, delayed_model_loading=False):
+    launcher_model_mapping = {
+        'dlsdk': I3DFlowDLSDKModel,
+        'tf': I3DFlowTFModel
+    }
+    framework = launcher.config['framework']
+    model_class = launcher_model_mapping.get(framework)
+    if not model_class:
+        raise ValueError('model for framework {} is not supported'.format(framework))
+    return model_class(model_config, launcher, data_source, delayed_model_loading)
 
 
 class I3DEvaluator(BaseEvaluator):
@@ -48,7 +73,7 @@ class I3DEvaluator(BaseEvaluator):
     def from_configs(cls, config, delayed_model_loading=False):
         dataset_config = config['datasets']
         launcher_settings = config['launchers'][0]
-        supported_frameworks = ['dlsdk']
+        supported_frameworks = ['dlsdk', 'tf']
         if not launcher_settings['framework'] in supported_frameworks:
             raise ConfigError('{} framework not supported'.format(launcher_settings['framework']))
         if 'device' not in launcher_settings:
@@ -75,10 +100,10 @@ class I3DEvaluator(BaseEvaluator):
             if not contains_all(network_info, ['flow', 'rgb']):
                 raise ConfigError('configuration for flow/rgb does not exist')
 
-        flow_model = I3DFlowModel(
+        flow_model = create_flow_model(
             network_info.get('flow', {}), launcher, data_source, delayed_model_loading
         )
-        rgb_model = I3DRGBModel(
+        rgb_model = create_rgb_model(
             network_info.get('rgb', {}), launcher, data_source, delayed_model_loading
         )
         if rgb_model.output_blob != flow_model.output_blob:
@@ -98,10 +123,11 @@ class I3DEvaluator(BaseEvaluator):
     @staticmethod
     def combine_predictions(output_rgb, output_flow):
         output = {}
-        for key_rgb, key_flow in zip(output_rgb.keys(), output_flow.keys()):
-            data_rgb = np.asarray(output_rgb[key_rgb])
-            data_flow = np.asarray(output_flow[key_flow])
-
+        output_rgb_ = output_rgb[0] if isinstance(output_rgb, list) else output_rgb
+        output_flow_ = output_flow[0] if isinstance(output_flow, list) else output_flow
+        for key_rgb, key_flow in zip(output_rgb_.keys(), output_flow_.keys()):
+            data_rgb = np.asarray(output_rgb_[key_rgb])
+            data_flow = np.asarray(output_flow_[key_flow])
             if data_rgb.shape != data_flow.shape:
                 raise ValueError("Сalculation of combined output is not possible. Outputs for rgb and flow models have "
                                  "different shapes. rgb model's output shape: {}. "
@@ -216,7 +242,7 @@ class I3DEvaluator(BaseEvaluator):
     def release(self):
         self.rgb_model.release()
         self.flow_model.release()
-        self.launcher.release()
+        # self.launcher.release()
 
     def reset(self):
         if self.metric_executor:
@@ -265,7 +291,7 @@ class I3DEvaluator(BaseEvaluator):
             self.dataset.make_subset(end=num_images, accept_pairs=allow_pairwise)
 
 
-class BaseModel:
+class BaseDLSDKModel:
     def __init__(self, network_info, launcher, data_source, delayed_model_loading=False):
         self.input_blob = None
         self.output_blob = None
@@ -384,7 +410,7 @@ class BaseModel:
         pass
 
 
-class I3DRGBModel(BaseModel):
+class I3DRGBDLSDKModel(BaseDLSDKModel):
     def __init__(self, network_info, launcher, data_source, delayed_model_loading=False):
         self.net_type = 'rgb'
         super().__init__(network_info, launcher, data_source, delayed_model_loading)
@@ -406,7 +432,7 @@ class I3DRGBModel(BaseModel):
         return image
 
 
-class I3DFlowModel(BaseModel):
+class I3DFlowDLSDKModel(BaseDLSDKModel):
     def __init__(self, network_info, launcher, data_source, delayed_model_loading=False):
         self.net_type = 'flow'
         super().__init__(network_info, launcher, data_source, delayed_model_loading)
@@ -414,5 +440,79 @@ class I3DFlowModel(BaseModel):
     def prepare_data(self, data):
         numpy_data = data[1]
         prepared_data = self.reader(numpy_data)
+        prepared_data.data = self.fit_to_input(prepared_data.data)
+        return prepared_data
+
+
+class BaseTFModel:
+    def __init__(self, network_info, data_source, delayed_model_loading=False):
+        reader_config = network_info.get('reader', {})
+        source_prefix = reader_config.get('source_prefix', '')
+        reader_config.update({
+            'data_source': data_source / source_prefix
+        })
+        self.reader = create_reader(reader_config)
+        if not delayed_model_loading:
+            self.load_model(network_info)
+
+    def predict(self, input_data):
+        return self.network.predict(input_data)
+
+    def release(self):
+        del self.network
+
+    def load_model(self, network_info):
+        model = Path(network_info['model'])
+        print_info('{} - Found model: {}'.format(self.net_type, model))
+        self.network = TFLauncher(network_info)
+        self.output_blob = self.network.output_blob
+        self.input_blob = list(self.network.inputs.keys())[0]
+
+
+    def fit_to_input(self, input_data):
+        input_data = np.array(input_data)
+        input_data = np.expand_dims(input_data, axis=0)
+        return {self.input_blob: input_data}
+
+    def prepare_data(self, data):
+        pass
+
+
+class I3DRGBTFModel(BaseTFModel):
+    def __init__(self, network_info, launcher, data_source, delayed_model_loading=False):
+        self.net_type = 'rgb'
+        super().__init__(network_info, data_source, delayed_model_loading)
+
+    def prepare_data(self, data):
+        image_data = data[0]
+        prepared_data = self.reader(image_data)
+        prepared_data = self.preprocessing(prepared_data)
+        prepared_data.data = self.fit_to_input(prepared_data.data)
+        return prepared_data
+
+    @staticmethod
+    def preprocessing(image):
+        resizer_config = {'type': 'resize', 'size': 256, 'aspect_ratio_scale': 'fit_to_window'}
+        resizer = Resize(resizer_config)
+        image = resizer.process(image)
+        normalization_config = {'type': 'normalization', 'mean': 127.5, 'std': 127.5}
+        normalizer = Normalize(normalization_config)
+        for i, frame in enumerate(image.data):
+            image.data[i] = Crop.process_data(frame, 224, 224, None, False, True, {})
+        image = normalizer.process(image)
+        return image
+
+
+class I3DFlowTFModel(BaseTFModel):
+    def __init__(self, network_info, launcher, data_source, delayed_model_loading=False):
+        self.net_type = 'flow'
+        super().__init__(network_info, data_source, delayed_model_loading)
+
+    def prepare_data(self, data):
+        numpy_data = data[1]
+        prepared_data = self.reader(numpy_data)
+        normalization_config = {'type': 'normalization', 'mean': 127.5, 'std': 127.5}
+        normalizer = Normalize(normalization_config)
+        prepared_data = normalizer.process(prepared_data)
         prepared_data.data = self.fit_to_input(prepared_data.data)
         return prepared_data

@@ -1,0 +1,57 @@
+# Copyright (c) 2021 Intel Corporation
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+description: >-
+
+task_type: classification
+files:
+  - name: timm-0.4.5-py3-none-any.whl
+    size: 287415
+    sha256: 8699f644a60527005db07f31ceffef5349c4d144749e1243733c64220a7d6f92
+    source: https://files.pythonhosted.org/packages/9e/89/d94f59780b5dd973154bf506d8ce598f6bfe7cc44dd445d644d6d3be8c39/timm-0.4.5-py3-none-any.whl
+  - name: timm/models/tnt.py
+    size: 10057
+    sha256: f2ead4c8e78df8f7fa9df95e26f568b06462f13301ccd2452ba7bf87506fa9ba
+    source: https://raw.githubusercontent.com/rwightman/pytorch-image-models/f606c45c3860bbff297b3a2a30e5d574674f3179/timm/models/tnt.py
+  - name: tnt_s_patch16_224.pth
+    size: 95147301
+    sha256: 3891c9cbb2e8ca12b26b7376f100415a07cf6bf1b7848e7dfd708000f15f0ea8
+    source: https://github.com/contrastive/pytorch-image-models/releases/download/TNT/tnt_s_patch16_224.pth.tar
+postprocessing:
+  - $type: unpack_archive
+    format: zip
+    file: timm-0.4.5-py3-none-any.whl
+  - $type: regex_replace
+    file: timm/models/__init__.py
+    pattern: 'from \.sknet import \*'
+    replacement: 'from .sknet import *\nfrom .tnt import *'
+conversion_to_onnx_args:
+  - --model-path=$dl_dir
+  - --model-name=tnt_s_patch16_224
+  - --import-module=timm.models.tnt
+  - --weights=$dl_dir/tnt_s_patch16_224.pth
+  - --input-shape=1,3,224,224
+  - --input-names=image
+  - --output-names=probs
+  - --output-file=$conv_dir/tnt.onnx
+model_optimizer_args:
+  - --input_shape=[1,3,224,224]
+  - --input=image
+  - --input_model=$conv_dir/tnt.onnx
+  - --mean_values=image[127.5, 127.5, 127.5]
+  - --scale_values=image[127.5, 127.5, 127.5]
+  - --reverse_input_channels
+  - --output=probs
+framework: pytorch
+license: https://raw.githubusercontent.com/rwightman/pytorch-image-models/master/LICENSE

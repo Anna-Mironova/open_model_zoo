@@ -96,25 +96,6 @@ class InputFeeder:
                 raise ConfigError('Network should contain at least one layer for setting variable data.')
 
     def _fill_image_info_inputs(self, data_representation_batch):
-        def prepare_image_info(image_sizes_batch, input_name, preprocessed_input_info=False):
-            image_info = []
-            input_shape = self.shape_checker(input_name)
-            for image_size in image_sizes_batch:
-                if np.isscalar(image_size):
-                    image_info.append(image_size)
-                    continue
-
-                height, width = image_size[:2]
-                image_info_ = [height, width]
-                info_size = input_shape[-1]
-                if info_size == 3:
-                    image_info_ += [1] if not preprocessed_input_info else image_size[2]
-                if info_size == 6:
-                    image_info_ += [0, 0, 0, 0]
-                image_info.append(image_info_)
-
-            return image_info
-
         def prepare_scale_factor(image_meta):
             if 'scale_x' in image_meta[0]:
                 return [[meta['scale_y'], meta['scale_x']] for meta in image_meta]
@@ -127,7 +108,7 @@ class InputFeeder:
             image_info_data = [meta['image_info'] for meta in meta_batch]
             image_infos = {
                 image_info_input:
-                    prepare_image_info(image_info_data, image_info_input, True)
+                    self._prepare_image_info(image_info_data, image_info_input, True)
                 for image_info_input in self.image_info_inputs
             }
             im_info_resolved = True
@@ -138,11 +119,11 @@ class InputFeeder:
             update_image_infos = {input_name: scale_info for input_name in self.scale_factor_inputs}
             image_infos.update(update_image_infos)
         image_sizes = [meta['image_size'] for meta in meta_batch]
-        image_infos.update({image_info_input: prepare_image_info(image_sizes, image_info_input)
+        image_infos.update({image_info_input: self._prepare_image_info(image_sizes, image_info_input)
                             for image_info_input in self.orig_image_info_inputs})
         if not im_info_resolved:
             image_infos.update(
-                {image_info_input: prepare_image_info(image_sizes, image_info_input)
+                {image_info_input: self._prepare_image_info(image_sizes, image_info_input)
                  for image_info_input in self.image_info_inputs})
 
         return image_infos
@@ -166,7 +147,16 @@ class InputFeeder:
         for idx, input_layer in enumerate(self.non_constant_inputs):
             input_batch = []
             input_regex = (self.inputs_mapping or {}).get(input_layer)
+            process_image_info_layer = input_layer == 'image_info'
             for data_representation in data_representation_batch:
+                if process_image_info_layer:
+                    if filled_inputs.get(input_layer):
+                        continue
+                    data_shape = data_representation.data.shape
+                    image_info_inputs = {input_layer: self._prepare_image_info([data_shape], input_layer)}
+                    filled_inputs = {**image_info_inputs}
+                    continue
+
                 identifiers = data_representation.identifier
                 data = data_representation.data
                 if isinstance(identifiers, ParametricImageIdentifier):
@@ -205,11 +195,32 @@ class InputFeeder:
                     raise ConfigError('Suitable data for filling layer {} not found'.format(input_layer))
                 input_batch.append(input_data)
 
+            if process_image_info_layer:
+                continue
             filled_inputs[input_layer] = input_batch
 
         return self._transform_batch(
             filled_inputs, extract_image_representations(data_representation_batch, meta_only=True)
         )
+
+    def _prepare_image_info(self, image_sizes_batch, input_name, preprocessed_input_info=False):
+        image_info = []
+        input_shape = self.shape_checker(input_name)
+        for image_size in image_sizes_batch:
+            if np.isscalar(image_size):
+                image_info.append(image_size)
+                continue
+
+            height, width = image_size[:2]
+            image_info_ = [height, width]
+            info_size = input_shape[-1]
+            if info_size == 3:
+                image_info_ += [1] if not preprocessed_input_info else image_size[2]
+            if info_size == 6:
+                image_info_ += [0, 0, 0, 0]
+            image_info.append(image_info_)
+
+        return image_info
 
     def fill_inputs(self, data_representation_batch):
         if self.dummy:

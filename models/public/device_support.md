@@ -152,6 +152,7 @@
 | vgg16 | YES | YES | YES |
 | vgg19 | YES | YES | YES |
 | vgg19-caffe2 | YES | YES | YES |
+| vitstr-small-patch16-224| YES | YES | |
 | wavernn-rnn | YES | YES | YES |
 | wavernn-upsampler | YES | YES |    |
 | yolact-resnet50-fpn-pytorch | YES | YES | YES |
